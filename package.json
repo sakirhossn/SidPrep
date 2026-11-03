@@ -6,6 +6,9 @@
   "scripts": {
     "dev:api": "pnpm --filter @sidprep/api dev",
     "dev:web": "pnpm --filter @sidprep/web dev",
+    "dev:mobile": "pnpm --filter @sidprep/mobile start",
+    "dev:mobile:web": "pnpm --filter @sidprep/mobile web",
+    "dev:mock": "pnpm --filter @sidprep/mock-backend start",
     "build": "pnpm --filter @sidprep/contracts build && pnpm --filter @sidprep/design-tokens build && pnpm --filter @sidprep/api build && pnpm --filter @sidprep/web build",
     "test": "pnpm --filter @sidprep/contracts test && pnpm --filter @sidprep/api test",
     "lint": "pnpm -r lint",
