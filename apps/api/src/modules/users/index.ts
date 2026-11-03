@@ -58,6 +58,113 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
+   * GET /home
+   * Student home dashboard
+   */
+  fastify.get('/home', async (request, reply) => {
+    const sscExam = Array.from(db.exams.values()).find((e) => e.code.includes('CGL')) || Array.from(db.exams.values())[0];
+    const recommended = Array.from(db.tests.values()).slice(0, 4).map((t) => ({
+      id: t.id,
+      title: t.title,
+      examTitle: t.examCode,
+      durationMinutes: t.durationMinutes,
+      questionsCount: t.totalQuestions,
+      type: t.type === 'FULL' ? 'FULL_LENGTH' : t.type === 'PYQ' ? 'PYQ' : 'SECTIONAL',
+    }));
+
+    return reply.send({
+      primaryExam: sscExam ? {
+        id: sscExam.id,
+        body: sscExam.bodyCode,
+        code: sscExam.code,
+        title: sscExam.name,
+        description: sscExam.description,
+        currentStatus: 'EXAM_SCHEDULED',
+        officialExamDate: '2026-09-12T09:00:00Z',
+        isDateAnnounced: true,
+        verificationSourceUrl: sscExam.sourceUrl,
+        lastVerifiedAt: sscExam.verifiedDate,
+        stagesCount: sscExam.stagesCount,
+        availableTestsCount: 24,
+      } : null,
+      selectedExams: [],
+      dailyGoal: {
+        targetMinutes: 60,
+        completedMinutes: 35,
+        streakDays: 4,
+        accuracyRate: 78.5,
+      },
+      activeAttempt: null,
+      todayTasksSummary: {
+        totalTasks: 4,
+        completedTasks: 2,
+      },
+      recommendedTests: recommended,
+      dailyAffairsCount: Array.from(db.newsDrafts.values()).filter((d) => d.editorialStatus === 'PUBLISHED').length || 2,
+    });
+  });
+
+  /**
+   * GET /study-plan
+   * Student daily study plan
+   */
+  fastify.get('/study-plan', async (request, reply) => {
+    return reply.send({
+      date: new Date().toISOString().split('T')[0],
+      dayStreak: 4,
+      targetMinutes: 60,
+      completedMinutes: 35,
+      missedTasksCount: 0,
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'Quantitative Aptitude: Percentages & Successive Discount',
+          description: 'Practice 25 high-yield Tier-I calculation questions with formula tricks',
+          type: 'TOPIC_STUDY',
+          estimatedMinutes: 30,
+          isCompleted: true,
+          completedAt: new Date().toISOString(),
+          isMissed: false,
+          subjectName: 'Quantitative Aptitude',
+          topicName: 'Percentages',
+          actionRoute: '/resources',
+        },
+        {
+          id: 'task-2',
+          title: 'Current Affairs Daily 5-Minute Quiz',
+          description: 'Fact-checked questions based on today\'s PIB and RBI circulars',
+          type: 'CURRENT_AFFAIRS_QUIZ',
+          estimatedMinutes: 5,
+          isCompleted: true,
+          completedAt: new Date().toISOString(),
+          isMissed: false,
+          subjectName: 'General Awareness',
+          actionRoute: '/(tabs)/affairs',
+        },
+        {
+          id: 'task-3',
+          title: 'SSC CGL General Intelligence & Reasoning Sectional Mock',
+          description: '25 Questions • 50 Marks • Timed exam environment with -0.5 negative marking',
+          type: 'SECTIONAL_MOCK',
+          estimatedMinutes: 20,
+          isCompleted: false,
+          isMissed: false,
+          subjectName: 'Reasoning',
+          actionRoute: '/(tabs)/mocks',
+        },
+      ],
+      weakTopicRecommendations: [
+        {
+          topicId: 'math_geom',
+          topicName: 'Geometry & Triangles Congruency',
+          reason: 'Accuracy was 52% in last 3 attempts (target: 80%)',
+          suggestedAction: 'Review formula handbook properties of incentre & circumcentre',
+        },
+      ],
+    });
+  });
+
+  /**
    * GET /admin/users
    * Admin Student Directory with masked PII and filters
    */

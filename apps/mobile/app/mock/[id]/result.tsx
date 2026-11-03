@@ -144,7 +144,7 @@ export default function MockResultScreen() {
                 Target Weak Areas for Revision
               </Text>
             </View>
-            {result.weakTopics.map(w => (
+            {(result.weakTopics ?? []).map(w => (
               <Text key={w.topicId} style={[styles.weakTopicLine, { color: theme.text, fontSize: scaledFontSize('xs') }]}>
                 • <Text style={{ fontWeight: '700' }}>{w.topicName}</Text>: {w.incorrectCount} negative marks recorded.
               </Text>
@@ -158,7 +158,7 @@ export default function MockResultScreen() {
             Sectional Performance
           </Text>
 
-          {result.sections.map(sec => (
+          {(result.sections ?? []).map(sec => (
             <View key={sec.sectionId} style={[styles.secCard, { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.md }]}>
               <View style={styles.secHeader}>
                 <Text style={[styles.secTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
@@ -187,7 +187,7 @@ export default function MockResultScreen() {
             Solutions & Answer Keys
           </Text>
 
-          {result.solutions.map((sol, index) => {
+          {(result.solutions ?? []).map((sol, index) => {
             const isExpanded = expandedSolutions.has(sol.questionId);
             return (
               <View

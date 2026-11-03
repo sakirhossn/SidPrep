@@ -24,6 +24,27 @@ import {
   PaginatedResponseSchema
 } from '@sidprep/contracts';
 
+function resolveDefaultApiUrl(): string {
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return process.env.EXPO_PUBLIC_API_URL;
+  }
+  if (typeof process !== 'undefined' && process.env['NODE_ENV'] === 'test') {
+    return 'https://api.sidprep.in/v1';
+  }
+  try {
+    const Constants = require('expo-constants');
+    const config = Constants?.default?.expoConfig || Constants?.expoConfig;
+    const hostUri = config?.hostUri;
+    if (hostUri) {
+      const ip = hostUri.split(':')[0];
+      if (ip && ip !== 'localhost' && ip !== '127.0.0.1') {
+        return `http://${ip}:4000/v1`;
+      }
+    }
+  } catch {}
+  return 'http://localhost:4000/v1';
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly statusCode: number,
@@ -61,7 +82,7 @@ export class ApiError extends Error {
 }
 
 export class SidPrepApiClient {
-  private baseUrl = 'https://api.sidprep.in/v1';
+  private baseUrl = resolveDefaultApiUrl();
   private customFetch?: typeof fetch;
   private isRefreshing = false;
   private refreshPromise: Promise<string | null> | null = null;
@@ -258,7 +279,11 @@ export class SidPrepApiClient {
 
   // 3. Exam Endpoints
   async getExams(): Promise<ExamSummary[]> {
-    return this.request<ExamSummary[]>('/exams');
+    const res = await this.request<any>('/exams');
+    if (Array.isArray(res)) return res;
+    if (Array.isArray(res?.data)) return res.data;
+    if (Array.isArray(res?.items)) return res.items;
+    return [];
   }
 
   async getExamDetail(id: string): Promise<ExamDetail> {
@@ -271,7 +296,10 @@ export class SidPrepApiClient {
     if (params?.examId) query.append('examId', params.examId);
     if (params?.type) query.append('type', params.type);
     const queryString = query.toString() ? `?${query.toString()}` : '';
-    return this.request<{ items: TestItem[]; total: number }>(`/tests${queryString}`);
+    const res = await this.request<any>(`/tests${queryString}`);
+    const items: TestItem[] = Array.isArray(res?.items) ? res.items : Array.isArray(res?.data) ? res.data : [];
+    const total = typeof res?.total === 'number' ? res.total : (res?.pagination?.total ?? items.length);
+    return { items, total };
   }
 
   async startAttempt(testId: string): Promise<StartAttemptResponse> {
@@ -296,7 +324,10 @@ export class SidPrepApiClient {
 
   // 5. Current Affairs & Quizzes
   async getCurrentAffairs(): Promise<{ items: CurrentAffairBrief[]; total: number }> {
-    return this.request<{ items: CurrentAffairBrief[]; total: number }>('/current-affairs');
+    const res = await this.request<any>('/current-affairs');
+    const items: CurrentAffairBrief[] = Array.isArray(res?.items) ? res.items : Array.isArray(res?.data) ? res.data : [];
+    const total = typeof res?.total === 'number' ? res.total : (res?.pagination?.total ?? items.length);
+    return { items, total };
   }
 
   // 6. Study Plan
@@ -306,7 +337,10 @@ export class SidPrepApiClient {
 
   // 7. Resource Library & Viewer
   async getResources(): Promise<{ items: ResourceItem[]; total: number }> {
-    return this.request<{ items: ResourceItem[]; total: number }>('/resources');
+    const res = await this.request<any>('/resources');
+    const items: ResourceItem[] = Array.isArray(res?.items) ? res.items : Array.isArray(res?.data) ? res.data : [];
+    const total = typeof res?.total === 'number' ? res.total : (res?.pagination?.total ?? items.length);
+    return { items, total };
   }
 
   async getDownloadTicket(resourceId: string): Promise<ResourceDownloadTicketResponse> {

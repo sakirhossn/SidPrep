@@ -32,18 +32,23 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
     const total = items.length;
     const startIndex = (p - 1) * lim;
     const paginated = items.slice(startIndex, startIndex + lim);
+    const mapped = paginated.map((t) => ({
+      id: t.id,
+      examId: t.examCode.toLowerCase(),
+      examCode: t.examCode,
+      title: t.title,
+      type: t.type,
+      durationMinutes: t.durationMinutes,
+      totalQuestions: t.totalQuestions,
+      totalMarks: t.totalMarks,
+      isFree: t.isFree,
+      isLocked: !t.isFree,
+    }));
 
     return reply.send({
-      data: paginated.map((t) => ({
-        id: t.id,
-        examCode: t.examCode,
-        title: t.title,
-        type: t.type,
-        durationMinutes: t.durationMinutes,
-        totalQuestions: t.totalQuestions,
-        totalMarks: t.totalMarks,
-        isFree: t.isFree,
-      })),
+      items: mapped,
+      data: mapped,
+      total,
       pagination: {
         total,
         page: p,

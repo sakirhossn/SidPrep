@@ -41,7 +41,9 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
     const paginated = items.slice(startIndex, startIndex + lim);
 
     return reply.send({
+      items: paginated,
       data: paginated,
+      total,
       pagination: {
         total,
         page: p,

@@ -41,7 +41,7 @@ export default function ExamHubScreen() {
     );
   }
 
-  const currentStage = exam.stages[selectedStageIndex];
+  const currentStage = (exam.stages && exam.stages[selectedStageIndex]) || exam.stages?.[0];
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -150,7 +150,7 @@ export default function ExamHubScreen() {
               <Text style={[styles.subHeading, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
                 OFFICIAL SECTIONS & MARKING
               </Text>
-              {currentStage.sections.map((sec) => (
+              {(currentStage?.sections ?? []).map((sec) => (
                 <View key={sec.id} style={[styles.sectionItem, { borderColor: theme.border }]}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.sectionName, { color: theme.text, fontSize: scaledFontSize('sm') }]}>
@@ -172,12 +172,12 @@ export default function ExamHubScreen() {
             Official Syllabus Hierarchy
           </Text>
 
-          {exam.syllabusTree.length === 0 ? (
+          {(!exam.syllabusTree || exam.syllabusTree.length === 0) ? (
             <Text style={[styles.emptyText, { color: theme.textMuted, fontSize: scaledFontSize('sm') }]}>
               Syllabus is being verified with official examination commission bulletin.
             </Text>
           ) : (
-            exam.syllabusTree.map((topic: SyllabusTopic) => (
+            (exam.syllabusTree ?? []).map((topic: SyllabusTopic) => (
               <View key={topic.id} style={[styles.topicBox, { borderColor: theme.border }]}>
                 <View style={styles.topicHeader}>
                   <View style={{ flex: 1 }}>
@@ -197,7 +197,7 @@ export default function ExamHubScreen() {
                   </View>
                 </View>
 
-                {topic.subtopics && topic.subtopics.map((sub: SyllabusTopic) => (
+                {(topic.subtopics ?? []).map((sub: SyllabusTopic) => (
                   <View key={sub.id} style={styles.subtopicRow}>
                     <CheckCircle2 size={14} color={(sub.completionPercentage ?? 0) >= 100 ? theme.success : theme.textMuted} />
                     <Text style={[styles.subtopicTitle, { color: theme.textMuted, fontSize: scaledFontSize('sm') }]}>

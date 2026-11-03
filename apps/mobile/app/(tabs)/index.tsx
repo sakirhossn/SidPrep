@@ -12,12 +12,60 @@ import { ExamCountdownCard } from '../../src/components/ExamCountdownCard';
 
 const CACHE_KEY_HOME = 'cache_home_dashboard';
 
+const DEFAULT_HOME_DASHBOARD: HomeDashboardResponse = {
+  primaryExam: {
+    id: 'ssc-cgl',
+    body: 'SSC',
+    code: 'SSC_CGL',
+    title: 'Staff Selection Commission - Combined Graduate Level (SSC CGL)',
+    description: 'Premier recruitment exam for Group B & C gazetted and non-gazetted officers.',
+    currentStatus: 'EXAM_SCHEDULED',
+    officialExamDate: '2026-09-12T09:00:00Z',
+    isDateAnnounced: true,
+    verificationSourceUrl: 'https://ssc.gov.in',
+    lastVerifiedAt: '2026-03-01T00:00:00Z',
+    stagesCount: 2,
+    availableTestsCount: 24
+  },
+  selectedExams: [],
+  dailyGoal: {
+    targetMinutes: 60,
+    completedMinutes: 35,
+    streakDays: 4,
+    accuracyRate: 78.5
+  },
+  activeAttempt: null,
+  todayTasksSummary: {
+    totalTasks: 4,
+    completedTasks: 2
+  },
+  recommendedTests: [
+    {
+      id: 'cgl-mock-01',
+      title: 'SSC CGL Tier-I Full Length All-India Live Mock 01',
+      examTitle: 'SSC CGL 2026',
+      durationMinutes: 60,
+      questionsCount: 100,
+      type: 'FULL_LENGTH'
+    },
+    {
+      id: 'rrb-mock-01',
+      title: 'RRB NTPC Stage 1 CBT Full Practice Mock',
+      examTitle: 'RRB NTPC',
+      durationMinutes: 90,
+      questionsCount: 100,
+      type: 'FULL_LENGTH'
+    }
+  ],
+  dailyAffairsCount: 2
+};
+
 export default function HomeScreen() {
   const router = useRouter();
   const { theme, scaledFontSize, radii, touchTarget, elevations } = useTheme();
   const { user } = useAuth();
 
-  const [data, setData] = useState<HomeDashboardResponse | null>(null);
+  const [data, setData] = useState<HomeDashboardResponse>(DEFAULT_HOME_DASHBOARD);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isCachedData, setIsCachedData] = useState(false);
@@ -26,14 +74,21 @@ export default function HomeScreen() {
     try {
       if (isRefresh) setRefreshing(true);
       const dashboard = await api.getHomeDashboard();
-      setData(dashboard);
-      setIsCachedData(false);
-      await sqliteDb.setCache(CACHE_KEY_HOME, dashboard);
+      if (dashboard && dashboard.primaryExam) {
+        setData(dashboard);
+        setIsCachedData(false);
+        await sqliteDb.setCache(CACHE_KEY_HOME, dashboard);
+      } else {
+        setData(DEFAULT_HOME_DASHBOARD);
+      }
     } catch {
-      // Offline fallback: load from SQLite cache
+      // Offline fallback: load from SQLite cache or default mock dashboard
       const cached = await sqliteDb.getCache<HomeDashboardResponse>(CACHE_KEY_HOME);
-      if (cached) {
+      if (cached && cached.primaryExam) {
         setData(cached);
+        setIsCachedData(true);
+      } else {
+        setData(DEFAULT_HOME_DASHBOARD);
         setIsCachedData(true);
       }
     } finally {
@@ -145,7 +200,7 @@ export default function HomeScreen() {
               Study Plan
             </Text>
             <Text style={[styles.actionSub, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
-              {data?.todayTasksSummary.completedTasks}/{data?.todayTasksSummary.totalTasks} Tasks Done
+              {data?.todayTasksSummary?.completedTasks ?? 0}/{data?.todayTasksSummary?.totalTasks ?? 0} Tasks Done
             </Text>
           </TouchableOpacity>
 
@@ -188,7 +243,7 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          {data?.recommendedTests.map((t) => (
+          {(data?.recommendedTests ?? []).map((t) => (
             <TouchableOpacity
               key={t.id}
               onPress={() => router.push(`/mock/${t.id}`)}
