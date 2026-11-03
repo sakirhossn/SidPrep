@@ -1,0 +1,8 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+strictDepBuilds: false
+
+allowBuilds:
+  esbuild: true

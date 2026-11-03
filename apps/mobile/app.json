@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "SidPrep",
+    "slug": "sidprep-student",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "sidprep",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#3B4CCA"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "in.sidprep.student"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#3B4CCA"
+      },
+      "package": "in.sidprep.student",
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-secure-store",
+      "expo-sqlite"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "apiBaseUrl": "https://api.sidprep.in/v1",
+      "eas": {
+        "projectId": "sidprep-student-app"
+      }
+    }
+  }
+}

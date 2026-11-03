@@ -1,0 +1,25 @@
+{
+  "name": "@sidprep/ui",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@sidprep/design-tokens": "workspace:*"
+  },
+  "devDependencies": {
+    "@sidprep/config": "workspace:*",
+    "typescript": "^5.5.4"
+  }
+}

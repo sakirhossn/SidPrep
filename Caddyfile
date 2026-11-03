@@ -1,0 +1,51 @@
+# ==============================================================================
+# SIDPREP 2.0 CADDY REVERSE PROXY CONFIGURATION
+# End-to-end TLS with Cloudflare Full (Strict) origin certificates
+# ==============================================================================
+
+# 1. Shared REST API (api.sidprep.in)
+api.sidprep.in {
+    reverse_proxy api:4000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}
+
+# 2. Public Website and Admin Console (sidprep.in)
+sidprep.in {
+    # CRITICAL SECURITY RULE: Never allow public CDN or proxy to cache admin panel
+    @adminPath {
+        path /admin*
+    }
+    header @adminPath {
+        Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate"
+        Pragma "no-cache"
+        Expires "0"
+        X-Robots-Tag "noindex, nofollow"
+    }
+
+    reverse_proxy web:3000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Global Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}

@@ -1,0 +1,252 @@
+openapi: 3.1.0
+info:
+  title: SidPrep 2.0 Shared Student API
+  version: 2.0.0
+  description: >
+    Official REST API contract for SidPrep 2.0 Student Mobile Application
+    and companion backend. Covers authentication, verified exams, mock runner,
+    offline answer synchronization, current affairs, study plan, resource viewer,
+    and privacy-preserving telemetry.
+servers:
+  - url: https://api.sidprep.in/v1
+    description: Production Shared API
+  - url: http://localhost:4000/v1
+    description: Local Development / Test Mock API
+
+paths:
+  /auth/otp/request:
+    post:
+      summary: Request Email OTP for login or registration
+      operationId: requestOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                phone:
+                  type: string
+      responses:
+        '200':
+          description: OTP challenge issued
+        '429':
+          description: Rate limit exceeded (Brevo send budget guard)
+
+  /auth/otp/verify:
+    post:
+      summary: Verify Email OTP and obtain JWT tokens
+      operationId: verifyOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, otp]
+              properties:
+                email:
+                  type: string
+                  format: email
+                otp:
+                  type: string
+                  minLength: 6
+                  maxLength: 6
+      responses:
+        '200':
+          description: Successfully authenticated
+        '401':
+          description: Invalid or expired OTP
+
+  /auth/refresh:
+    post:
+      summary: Refresh expired access token using refresh token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          description: Token refreshed
+        '401':
+          description: Refresh token revoked or expired
+
+  /me:
+    get:
+      summary: Get current authenticated student profile and settings
+      operationId: getMe
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile
+    patch:
+      summary: Update student preferences, exams, and settings
+      operationId: updateMe
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Updated profile
+
+  /home:
+    get:
+      summary: Get personalized home dashboard
+      operationId: getHomeDashboard
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Personalized home dashboard metrics
+
+  /exams:
+    get:
+      summary: List supported exam bodies and exams (SSC, RRB, WBPSC, IBPS)
+      operationId: listExams
+      responses:
+        '200':
+          description: List of verified exams
+
+  /exams/{id}:
+    get:
+      summary: Get exam details, syllabus tree, stages, and official notices
+      operationId: getExamDetail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Detailed exam structure and syllabus
+
+  /tests:
+    get:
+      summary: Get mock test catalogue with filters
+      operationId: listTests
+      parameters:
+        - name: examId
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [FULL_LENGTH, SECTIONAL, TOPIC_PRACTICE, PYQ]
+      responses:
+        '200':
+          description: Catalogue of available tests
+
+  /tests/{id}/start:
+    post:
+      summary: Start or resume a test attempt (server-authoritative timer)
+      operationId: startAttempt
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Attempt started with questions and server start timestamp
+
+  /sync/answers:
+    post:
+      summary: Synchronize answered questions idempotently with monotonic sequences
+      operationId: syncAnswers
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Answers saved and synced to database
+
+  /attempts/{id}/submit:
+    post:
+      summary: Formally submit test attempt and trigger authoritative grading
+      operationId: submitAttempt
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Graded attempt results and solutions
+
+  /current-affairs:
+    get:
+      summary: List published exam-relevant news briefs with official citations
+      operationId: listCurrentAffairs
+      responses:
+        '200':
+          description: Paginated current affairs briefs
+
+  /study-plan:
+    get:
+      summary: Get daily study plan tasks and completion status
+      operationId: getStudyPlan
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Daily study plan
+
+  /resources:
+    get:
+      summary: List educational documents and notes with preview/download policies
+      operationId: listResources
+      responses:
+        '200':
+          description: List of learning resources
+
+  /resources/{id}/download:
+    post:
+      summary: Generate short-lived signed download ticket (enforcing downloadAllowed=true)
+      operationId: getDownloadTicket
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Download ticket with signed URL
+        '403':
+          description: Download not permitted by admin policy
+
+  /telemetry:
+    post:
+      summary: Ingest batched anonymized diagnostic and error events
+      operationId: postTelemetry
+      responses:
+        '200':
+          description: Telemetry events accepted
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
