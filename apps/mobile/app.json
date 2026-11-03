@@ -43,10 +43,7 @@
       "typedRoutes": true
     },
     "extra": {
-      "apiBaseUrl": "https://api.sidprep.in/v1",
-      "eas": {
-        "projectId": "sidprep-student-app"
-      }
+      "apiBaseUrl": "https://api.sidprep.in/v1"
     }
   }
 }

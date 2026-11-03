@@ -25,5 +25,7 @@ Thumbs.db
 # Database / uploads
 *.sqlite
 *.sqlite-journal
+*.tsbuildinfo
+.expo/
 uploads/
 coverage/
