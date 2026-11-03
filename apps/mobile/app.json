@@ -37,7 +37,8 @@
       "expo-router",
       "expo-font",
       "expo-secure-store",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-splash-screen"
     ],
     "experiments": {
       "typedRoutes": true

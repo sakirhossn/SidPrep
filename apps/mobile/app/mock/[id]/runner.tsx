@@ -180,9 +180,9 @@ export default function MockRunnerScreen() {
       await sqliteDb.setCache(`result_${attempt.attemptId}`, result);
 
       router.replace({
-        pathname: `/mock/${id}/result`,
-        params: { attemptId: attempt.attemptId }
-      });
+        pathname: '/mock/[id]/result',
+        params: { id: id as string, attemptId: attempt.attemptId }
+      } as any);
     } catch (err: any) {
       setSubmitting(false);
       if (err instanceof ApiError && err.isOffline) {
