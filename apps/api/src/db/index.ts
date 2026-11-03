@@ -199,11 +199,47 @@ export interface JobRunRecord {
 }
 
 /**
+ * Verified PBKDF2 SHA-512 Hash for default admin password 'AdminSecurePass123!'
+ * Precomputed to ensure synchronous availability immediately upon startup without async race conditions.
+ */
+const DEFAULT_ADMIN_PASSWORD_HASH =
+  '5bd63df08953e9b7d83ebbec02aa79bf:900a28ae6b186c524c482b5335dfce3a7d55282e6d39f7093dad105e3acc87899791b0ce4eaabf8cda90e36f0b59c7d9edb6c3f12be0e89911a2f0dbab42233f';
+
+/**
  * In-Memory & PostgreSQL Dual Store
  */
 class SidPrepDatabase {
   public students = new Map<string, StudentRecord>();
-  public adminUsers = new Map<string, AdminUserRecord>();
+  public adminUsers = new Map<string, AdminUserRecord>([
+    [
+      'adm_1',
+      {
+        id: 'adm_1',
+        email: 'admin@sidprep.in',
+        name: 'Super Admin',
+        passwordHash: DEFAULT_ADMIN_PASSWORD_HASH,
+        role: 'SUPER_ADMIN',
+        totpSecret: 'JBSWY3DPEHPK3PXP', // Base32 test secret
+        is2faEnabled: true,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    [
+      'adm_2',
+      {
+        id: 'adm_2',
+        email: 'editor@sidprep.in',
+        name: 'Exam & Content Editor',
+        passwordHash: DEFAULT_ADMIN_PASSWORD_HASH,
+        role: 'EXAM_EDITOR',
+        totpSecret: 'JBSWY3DPEHPK3PXP',
+        is2faEnabled: true,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+  ]);
   public otpChallenges = new Map<string, { otp: string; expiresAt: number; attempts: number }>();
   public exams = new Map<string, ExamRecord>();
   public questions = new Map<string, QuestionRecord>();
@@ -223,31 +259,7 @@ class SidPrepDatabase {
   }
 
   private async seedInitialData() {
-    // 1. Seed Admin Users
-    const defaultPasswordHash = await hashPassword('AdminSecurePass123!');
-    this.adminUsers.set('adm_1', {
-      id: 'adm_1',
-      email: 'admin@sidprep.in',
-      name: 'Super Admin',
-      passwordHash: defaultPasswordHash,
-      role: 'SUPER_ADMIN',
-      totpSecret: 'JBSWY3DPEHPK3PXP', // Base32 test secret
-      is2faEnabled: true,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-    });
-
-    this.adminUsers.set('adm_2', {
-      id: 'adm_2',
-      email: 'editor@sidprep.in',
-      name: 'Exam & Content Editor',
-      passwordHash: defaultPasswordHash,
-      role: 'EXAM_EDITOR',
-      totpSecret: 'JBSWY3DPEHPK3PXP',
-      is2faEnabled: true,
-      isActive: true,
-      createdAt: new Date().toISOString(),
-    });
+    // 1. Admin Users are pre-seeded synchronously above with DEFAULT_ADMIN_PASSWORD_HASH
 
     // 2. Seed Real Official Exams (SSC, RRB, WBPSC, IBPS)
     this.exams.set('ssc-cgl', {
