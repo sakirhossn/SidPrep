@@ -41,11 +41,14 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK Environment
+        run: |
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> $GITHUB_ENV
+          yes | ${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
       - name: Install Monorepo Dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile || pnpm install
 
       - name: Build Shared Packages (Contracts & Tokens)
         run: |
@@ -54,7 +57,7 @@ jobs:
 
       - name: Prebuild Native Android Project
         working-directory: apps/mobile
-        run: npx expo prebuild --platform android --clean
+        run: npx expo prebuild --platform android --clean --no-install
         env:
           EXPO_PUBLIC_API_URL: https://api.sidprep.in/v1
 
@@ -88,7 +91,7 @@ jobs:
           # If unsigned, align and sign using Android build tools so it installs on any device
           if [[ "$APK_PATH" == *"unsigned"* ]]; then
             echo "Signing unsigned APK with self-signed keystore..."
-            BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+            BUILD_TOOLS_DIR=$(ls -d ${ANDROID_HOME}/build-tools/* | sort -V | tail -n 1)
             DEBUG_KEYSTORE="$HOME/.android/debug.keystore"
             mkdir -p "$HOME/.android"
             if [ ! -f "$DEBUG_KEYSTORE" ]; then
@@ -114,6 +117,8 @@ jobs:
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.RESOLVED_TAG }}
           name: SidPrep ${{ env.RESOLVED_TAG }} — Student Android App & System Release
@@ -121,7 +126,7 @@ jobs:
             ### SidPrep 2.0 Official Student Android Release
             
             **Release Tag:** `${{ env.RESOLVED_TAG }}`
-            **Architecture:** Android-first (ARM64 / ARMv7 / x86_64 universal APK)
+            **Architecture:** Android-first (Universal standalone APK)
             **Design System:** Ink & Moss v2 (#28563F, #1E3C2C, #DFF19B, #F7F7F2)
             
             #### Features Included in this Build:
