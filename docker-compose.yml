@@ -6,9 +6,9 @@ services:
     container_name: sidprep_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: sidprep_user
+      POSTGRES_USER: ${POSTGRES_USER:-sidprep_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sidprep_prod_secure_password_replace_me}
-      POSTGRES_DB: sidprep_db
+      POSTGRES_DB: ${POSTGRES_DB:-sidprep_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./apps/api/src/db/schema.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
@@ -20,7 +20,7 @@ services:
           cpus: '0.80'
           memory: 512M
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U sidprep_user -d sidprep_db']
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-sidprep_user} -d ${POSTGRES_DB:-sidprep_db}']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -37,10 +37,15 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
-      DATABASE_URL: postgresql://sidprep_user:${POSTGRES_PASSWORD:-sidprep_prod_secure_password_replace_me}@postgres:5432/sidprep_db
+      DATABASE_URL: postgresql://${POSTGRES_USER:-sidprep_user}:${POSTGRES_PASSWORD:-sidprep_prod_secure_password_replace_me}@postgres:5432/${POSTGRES_DB:-sidprep_db}
       JWT_SECRET: ${JWT_SECRET}
-      BREVO_API_KEY: ${BREVO_API_KEY}
-      NEWS_TIMEZONE: Asia/Kolkata
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://sidprep.in,https://api.sidprep.in}
+      BREVO_API_KEY: ${BREVO_API_KEY:-xkeysib-mock-local}
+      BREVO_SENDER_EMAIL: ${BREVO_SENDER_EMAIL:-no-reply@sidprep.in}
+      BREVO_SENDER_NAME: ${BREVO_SENDER_NAME:-SidPrep Notifications}
+      NEWS_TIMEZONE: ${NEWS_TIMEZONE:-Asia/Kolkata}
     ports:
       - '127.0.0.1:4000:4000'
     deploy:

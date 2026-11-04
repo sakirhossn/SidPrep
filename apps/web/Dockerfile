@@ -17,17 +17,17 @@ RUN pnpm --filter @sidprep/design-tokens build
 RUN pnpm --filter @sidprep/ui build
 RUN pnpm --filter @sidprep/web build
 
-FROM base AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
 USER node
 
-COPY --from=builder /app/apps/web/package.json ./
-COPY --from=builder /app/apps/web/.next ./.next
-COPY --from=builder /app/apps/web/public ./public
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/apps/web/public ./apps/web/public
+COPY --from=builder --chown=node:node /app/apps/web/.next/standalone ./
+COPY --from=builder --chown=node:node /app/apps/web/.next/static ./apps/web/.next/static
 
 EXPOSE 3000
-CMD ["pnpm", "start"]
+CMD ["node", "apps/web/server.js"]
