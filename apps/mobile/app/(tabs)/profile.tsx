@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert } f
 import { useRouter } from 'expo-router';
 import { Mail, BookOpen, Globe, Type, Moon, Bell, Download, Trash2, LogOut, Info, ShieldAlert } from 'lucide-react-native';
 import { SupportedLanguage } from '@sidprep/contracts';
+import { api } from '../../src/api/client';
 import { useAuth } from '../../src/context/AuthContext';
 import { useTheme } from '../../src/context/ThemeContext';
 import { Header } from '../../src/components/Header';
@@ -37,11 +38,16 @@ export default function ProfileScreen() {
     ]);
   };
 
-  const handleDataExport = () => {
-    Alert.alert(
-      'Request Data Export',
-      'In accordance with student privacy safeguards, an encrypted archive of your attempts and study history will be compiled and sent to your verified email within 24 hours.'
-    );
+  const handleDataExport = async () => {
+    try {
+      const res = await api.requestDataExport();
+      Alert.alert(
+        'Export Queued',
+        `Ticket ID: ${res.requestId}\nStatus: ${res.status}\n\nAn encrypted archive of your attempts and study history is being compiled and will be delivered to your registered email.`
+      );
+    } catch (e: any) {
+      Alert.alert('Export Error', e.message || 'Unable to queue export request. Please try again later.');
+    }
   };
 
   const handleDeleteAccount = () => {
@@ -53,8 +59,16 @@ export default function ProfileScreen() {
         {
           text: 'Request Deletion',
           style: 'destructive',
-          onPress: () => {
-            Alert.alert('Deletion Requested', 'Your request has been logged. Our compliance officer will process your deletion per statutory guidelines.');
+          onPress: async () => {
+            try {
+              const res = await api.requestAccountDeletion();
+              Alert.alert(
+                'Deletion Request Registered',
+                `Ticket ID: ${res.requestId}\nStatus: ${res.status}\n\nOur compliance officer will process your deletion per statutory guidelines.`
+              );
+            } catch (e: any) {
+              Alert.alert('Request Error', e.message || 'Unable to register deletion request.');
+            }
           }
         }
       ]

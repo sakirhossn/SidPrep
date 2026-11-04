@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Award, CheckCircle2, XCircle, Clock, Target, AlertTriangle, ArrowRight, ChevronDown, ChevronUp } from 'lucide-react-native';
 import { AttemptResult, QuestionSolution } from '@sidprep/contracts';
+import { api } from '../../../src/api/client';
 import { sqliteDb } from '../../../src/services/sqliteDatabase';
 import { useTheme } from '../../../src/context/ThemeContext';
 import { Header } from '../../../src/components/Header';
@@ -20,9 +21,15 @@ export default function MockResultScreen() {
     let mounted = true;
     (async () => {
       try {
-        const cached = await sqliteDb.getCache<AttemptResult>(`result_${attemptId}`);
-        if (mounted && cached) {
-          setResult(cached);
+        let loaded = await sqliteDb.getCache<AttemptResult>(`result_${attemptId}`);
+        if (!loaded && attemptId) {
+          loaded = await api.getAttemptResult(attemptId);
+          if (loaded) {
+            await sqliteDb.setCache(`result_${attemptId}`, loaded);
+          }
+        }
+        if (mounted && loaded) {
+          setResult(loaded);
         }
       } catch (e) {
         console.warn('Error reading attempt result:', e);

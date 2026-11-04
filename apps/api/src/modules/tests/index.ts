@@ -74,10 +74,9 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
-   * POST /attempts
-   * Start a new test attempt
+   * Helper: Start attempt logic
    */
-  fastify.post('/attempts', async (request, reply) => {
+  const startAttemptHandler = async (testId: string, request: any, reply: any) => {
     const authHeader = request.headers.authorization;
     let studentId = 'stu_anon';
     if (authHeader?.startsWith('Bearer ')) {
@@ -85,7 +84,6 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
       if (decoded?.sub) studentId = decoded.sub;
     }
 
-    const { testId } = request.body as { testId: string };
     const test = db.tests.get(testId);
 
     if (!test || !test.isPublished) {
@@ -136,6 +134,27 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
       durationSeconds: attemptRecord.durationSeconds,
       questions: questionsForRunner,
     });
+  };
+
+  /**
+   * POST /attempts
+   * Start a new test attempt via testId in body
+   */
+  fastify.post('/attempts', async (request, reply) => {
+    const { testId } = (request.body as { testId?: string }) || {};
+    if (!testId) {
+      return reply.code(400).send({ success: false, error: { code: 'INVALID_INPUT', message: 'testId is required' } });
+    }
+    return startAttemptHandler(testId, request, reply);
+  });
+
+  /**
+   * POST /tests/:id/start
+   * Start attempt via route parameter (OpenAPI alias)
+   */
+  fastify.post('/tests/:id/start', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    return startAttemptHandler(id, request, reply);
   });
 
   /**

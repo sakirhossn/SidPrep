@@ -17,10 +17,9 @@ import {
 
 export const authRoutes: FastifyPluginAsync = async (fastify) => {
   /**
-   * POST /auth/student/challenge
-   * Request email OTP with rate limiting and Brevo quota tracking
+   * Handler: Student OTP challenge
    */
-  fastify.post('/auth/student/challenge', async (request, reply) => {
+  const handleStudentChallenge = async (request: any, reply: any) => {
     const parse = StudentOtpChallengeSchema.safeParse(request.body);
     if (!parse.success) {
       return reply.code(400).send({ success: false, error: { code: 'INVALID_INPUT', message: 'Valid email is required' } });
@@ -71,13 +70,12 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       expiresAtSeconds: 600,
       devOtpHint: env.NODE_ENV === 'development' ? otp : undefined,
     });
-  });
+  };
 
   /**
-   * POST /auth/student/verify
-   * Verify email OTP and create or return student session
+   * Handler: Student OTP verify
    */
-  fastify.post('/auth/student/verify', async (request, reply) => {
+  const handleStudentVerify = async (request: any, reply: any) => {
     const parse = StudentOtpVerifySchema.safeParse(request.body);
     if (!parse.success) {
       return reply.code(400).send({ success: false, error: { code: 'INVALID_INPUT', message: 'Valid email and 6-digit OTP required' } });
@@ -133,8 +131,47 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       success: true,
       accessToken,
       refreshToken,
+      tokens: {
+        accessToken,
+        refreshToken,
+        expiresIn: 3600,
+      },
       expiresIn: 3600,
       user: student,
+    });
+  };
+
+  // Canonical paths + Contract aliases
+  fastify.post('/auth/student/challenge', handleStudentChallenge);
+  fastify.post('/auth/otp/request', handleStudentChallenge);
+
+  fastify.post('/auth/student/verify', handleStudentVerify);
+  fastify.post('/auth/otp/verify', handleStudentVerify);
+
+  /**
+   * POST /auth/refresh
+   * Token refresh endpoint
+   */
+  fastify.post('/auth/refresh', async (request, reply) => {
+    const { refreshToken } = (request.body as { refreshToken?: string }) || {};
+    if (!refreshToken) {
+      return reply.code(400).send({ success: false, error: { code: 'MISSING_TOKEN', message: 'Refresh token is required' } });
+    }
+    const decoded = verifyJwt<{ sub: string; type: string }>(refreshToken);
+    if (!decoded || !decoded.sub) {
+      return reply.code(401).send({ success: false, error: { code: 'INVALID_TOKEN', message: 'Invalid or expired refresh token' } });
+    }
+    const student = db.students.get(decoded.sub);
+    if (!student || student.status !== 'ACTIVE') {
+      return reply.code(401).send({ success: false, error: { code: 'USER_NOT_FOUND', message: 'Student account not active' } });
+    }
+    const newAccessToken = signJwt({ sub: student.id, email: student.email, type: 'student' }, '1h');
+    const newRefreshToken = signJwt({ sub: student.id, type: 'student_refresh' }, '30d');
+    return reply.send({
+      success: true,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      expiresIn: 3600,
     });
   });
 
@@ -166,10 +203,8 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const passwordMatches = await verifyPassword(password, admin.passwordHash);
-    const isDev = env.NODE_ENV === 'development';
-    const isAccepted = passwordMatches || (isDev && (password === 'AdminSecurePass123!' || password === 'admin' || password === 'admin123'));
 
-    if (!isAccepted) {
+    if (!passwordMatches) {
       request.log.warn({ email }, 'Admin login rejected: password mismatch');
       db.logOperational({
         service: 'ADMIN_AUTH',
@@ -181,9 +216,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         success: false,
         error: {
           code: 'INVALID_CREDENTIALS',
-          message: isDev
-            ? 'Invalid admin credentials. In development mode, use email: admin@sidprep.in and password: AdminSecurePass123!'
-            : 'Invalid admin credentials',
+          message: 'Invalid administrative credentials.',
         },
       });
     }

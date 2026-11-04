@@ -273,6 +273,18 @@ export class SidPrepApiClient {
     });
   }
 
+  async requestDataExport(): Promise<{ success: boolean; requestId: string; status: string; message: string }> {
+    return this.request<{ success: boolean; requestId: string; status: string; message: string }>('/me/export', {
+      method: 'POST'
+    });
+  }
+
+  async requestAccountDeletion(): Promise<{ success: boolean; requestId: string; status: string; message: string }> {
+    return this.request<{ success: boolean; requestId: string; status: string; message: string }>('/me/delete', {
+      method: 'POST'
+    });
+  }
+
   async getHomeDashboard(): Promise<HomeDashboardResponse> {
     return this.request<HomeDashboardResponse>('/home');
   }
@@ -302,6 +314,10 @@ export class SidPrepApiClient {
     return { items, total };
   }
 
+  async getTestById(id: string): Promise<TestItem> {
+    return this.request<TestItem>(`/tests/${id}`);
+  }
+
   async startAttempt(testId: string): Promise<StartAttemptResponse> {
     return this.request<StartAttemptResponse>(`/tests/${testId}/start`, {
       method: 'POST'
@@ -322,6 +338,10 @@ export class SidPrepApiClient {
     });
   }
 
+  async getAttemptResult(attemptId: string): Promise<AttemptResult> {
+    return this.request<AttemptResult>(`/attempts/${attemptId}/result`);
+  }
+
   // 5. Current Affairs & Quizzes
   async getCurrentAffairs(): Promise<{ items: CurrentAffairBrief[]; total: number }> {
     const res = await this.request<any>('/current-affairs');
@@ -333,6 +353,13 @@ export class SidPrepApiClient {
   // 6. Study Plan
   async getStudyPlan(): Promise<DailyStudyPlanResponse> {
     return this.request<DailyStudyPlanResponse>('/study-plan');
+  }
+
+  async updateStudyTask(taskId: string, isCompleted: boolean): Promise<{ success: boolean; taskId: string; isCompleted: boolean }> {
+    return this.request<{ success: boolean; taskId: string; isCompleted: boolean }>(`/study-plan/tasks/${taskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isCompleted })
+    });
   }
 
   // 7. Resource Library & Viewer

@@ -14,16 +14,26 @@ export default function MockOverviewScreen() {
 
   const [test, setTest] = useState<TestItem | null>(null);
   const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const res = await api.getTests();
-        const found = res.items.find(t => t.id === id);
-        if (mounted) setTest(found ?? res.items[0] ?? null);
+        if (!id) {
+          if (mounted) setNotFound(true);
+          return;
+        }
+        const res = await api.getTestById(id);
+        if (mounted) {
+          if (res && res.id) {
+            setTest(res);
+          } else {
+            setNotFound(true);
+          }
+        }
       } catch (e) {
-        console.warn('Error loading test overview:', e);
+        if (mounted) setNotFound(true);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -31,10 +41,32 @@ export default function MockOverviewScreen() {
     return () => { mounted = false; };
   }, [id]);
 
-  if (loading || !test) {
+  if (loading) {
     return (
       <View style={[styles.centerContainer, { backgroundColor: theme.background }]}>
         <ActivityIndicator size="large" color={theme.primary} />
+      </View>
+    );
+  }
+
+  if (notFound || !test) {
+    return (
+      <View style={[styles.centerContainer, { backgroundColor: theme.background, padding: 24 }]}>
+        <AlertCircle size={48} color={theme.error} />
+        <Text style={[styles.title, { color: theme.text, marginTop: 16, textAlign: 'center' }]}>
+          Mock Test Not Found
+        </Text>
+        <Text style={[{ color: theme.textMuted, textAlign: 'center', marginTop: 8, fontSize: scaledFontSize('sm'), lineHeight: 20 }]}>
+          The requested mock test (ID: {id}) does not exist or has not been published by the editorial team.
+        </Text>
+        <TouchableOpacity
+          onPress={() => router.replace('/(tabs)/mocks')}
+          style={[styles.startBtn, { backgroundColor: theme.primary, marginTop: 24, paddingHorizontal: 24 }]}
+        >
+          <Text style={[styles.startBtnText, { color: theme.surface }]}>
+            Browse Mock Catalogue
+          </Text>
+        </TouchableOpacity>
       </View>
     );
   }

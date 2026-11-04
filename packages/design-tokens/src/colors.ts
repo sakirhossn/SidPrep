@@ -1,101 +1,121 @@
 /**
- * SidPrep 2.0 Color Palette
+ * SidPrep 2.0 Official Color Palette — Ink & Moss v2
  * Designed for focused, high-contrast, accessible EdTech mobile and web UI.
+ * Pure Ink & Moss system: Forest (#28563F), Charcoal Hero (#1E3C2C), Warm Canvas (#F4F3EE / #F7F7F2),
+ * Citrus Highlight (#DFF19B), Near-black Ink (#20291F), Muted borders (#E6E8DE).
  */
 
 export const colors = {
   light: {
-    primary: '#3B4CCA', // SidPrep signature Indigo
-    primaryLight: '#4F62E0',
-    primaryDark: '#2C3A9E',
-    primaryContainer: '#EEF2FF',
-    
-    background: '#F6F7FB', // Light clean canvas
-    surface: '#FFFFFF', // Card/sheet surface
-    surfaceVariant: '#F1F5F9', // Secondary background
-    surfaceSubtle: '#F8FAFC',
-    
-    text: '#0F172A', // Slate 900
-    textMuted: '#475569', // Slate 600
-    textSubtle: '#64748B', // Slate 500
-    textDisabled: '#94A3B8', // Slate 400
-    textInverse: '#FFFFFF',
-    
-    border: '#E2E8F0', // Slate 200
-    borderStrong: '#CBD5E1', // Slate 300
-    borderFocus: '#3B4CCA',
-    
-    success: '#0F766E', // Teal/Green 700 (accessible contrast)
-    successBg: '#F0FDFA',
-    successBorder: '#99F6E4',
-    
-    warning: '#D97706', // Amber 600
-    warningBg: '#FFFBEB',
-    warningBorder: '#FDE68A',
-    
-    error: '#DC2626', // Red 600 (strictly real errors)
-    errorBg: '#FEF2F2',
-    errorBorder: '#FECACA',
-    
-    info: '#0284C7', // Sky 600
-    infoBg: '#F0F9FF',
-    infoBorder: '#BAE6FD',
+    // Brand & Core Actions
+    primary: '#28563F', // Forest Primary
+    primaryPressed: '#183D2B', // Pressed action state / dark nav
+    primaryLight: '#EAF1E6', // Forest soft tint
+    primaryDark: '#1E3C2C', // Dark charcoal hero
+    primaryContainer: '#EAF1E6',
+    hero: '#1E3C2C', // Dark focus hero card
+    highlight: '#DFF19B', // Restrained citrus accent
+
+    // Canvas & Surfaces
+    background: '#F7F7F2', // Mobile canvas (warm paper)
+    canvas: '#F4F3EE', // Desk / public canvas
+    surface: '#FFFFFF', // Clean white card surface
+    surfaceVariant: '#EFF1E9', // Secondary subtle surface
+    surfaceSubtle: '#EFF1E9',
+
+    // Text & Content
+    text: '#20291F', // Near-black forest ink
+    textMuted: '#66716A', // Description & metadata
+    textSubtle: '#66716A',
+    textDisabled: '#9AA39C',
+    textInverse: '#F7F7F2',
+
+    // Borders & Dividers
+    border: '#E6E8DE', // Subtle border
+    borderStrong: '#D1D6C5',
+    borderFocus: '#28563F',
+
+    // Status Colors (WCAG 2.2 AA conformant)
+    success: '#24734E',
+    successBg: '#E9F4E7',
+    successBorder: '#C1E3C9',
+
+    warning: '#9B642D',
+    warningBg: '#FFF2DE',
+    warningBorder: '#F5DCB5',
+
+    error: '#B5483F',
+    errorBg: '#FBEFEB',
+    errorBorder: '#F3CCC7',
+
+    info: '#28563F',
+    infoBg: '#EAF1E6',
+    infoBorder: '#D2E2CC',
 
     // Verified Official Badge
-    verified: '#0F766E',
-    verifiedBg: '#CCFBF1',
+    verified: '#24734E',
+    verifiedBg: '#E9F4E7',
 
-    // Offline / Sync indicators
-    synced: '#0F766E',
-    pendingSync: '#D97706',
-    offline: '#64748B'
+    // Offline / Sync Indicators
+    synced: '#24734E',
+    pendingSync: '#9B642D',
+    offline: '#66716A',
   },
   dark: {
-    primary: '#6366F1', // Accessible Indigo for dark backgrounds
-    primaryLight: '#818CF8',
-    primaryDark: '#4338CA',
-    primaryContainer: '#1E1B4B',
-    
-    background: '#0B0F19', // Dark deep canvas
-    surface: '#151C2C', // Dark surface
-    surfaceVariant: '#1E293B', // Secondary dark surface
-    surfaceSubtle: '#111827',
-    
-    text: '#F8FAFC', // Slate 50
-    textMuted: '#94A3B8', // Slate 400
-    textSubtle: '#64748B', // Slate 500
-    textDisabled: '#475569', // Slate 600
-    textInverse: '#0F172A',
-    
-    border: '#1E293B', // Slate 800
-    borderStrong: '#334155', // Slate 700
-    borderFocus: '#818CF8',
-    
-    success: '#2DD4BF', // Teal 400
-    successBg: '#042F2E',
-    successBorder: '#115E59',
-    
-    warning: '#FBBF24', // Amber 400
-    warningBg: '#451A03',
-    warningBorder: '#78350F',
-    
-    error: '#F87171', // Red 400
-    errorBg: '#450A0A',
-    errorBorder: '#991B1B',
-    
-    info: '#38BDF8', // Sky 400
-    infoBg: '#082F49',
-    infoBorder: '#0369A1',
+    // Brand & Core Actions
+    primary: '#DFF19B', // Citrus primary on dark
+    primaryPressed: '#BFCF7D',
+    primaryLight: '#3B4A2C',
+    primaryDark: '#304839',
+    primaryContainer: '#3B4A2C',
+    hero: '#304839',
+    highlight: '#DFF19B',
+
+    // Canvas & Surfaces
+    background: '#151D18', // Deep forest dark canvas
+    canvas: '#151D18',
+    surface: '#1D2B22', // Dark card surface
+    surfaceVariant: '#29372D',
+    surfaceSubtle: '#29372D',
+
+    // Text & Content
+    text: '#F4F5EE', // Light cream text
+    textMuted: '#B5C1B1',
+    textSubtle: '#8F9E8B',
+    textDisabled: '#5F6F5E',
+    textInverse: '#151D18',
+
+    // Borders & Dividers
+    border: '#38463B',
+    borderStrong: '#4E5F52',
+    borderFocus: '#DFF19B',
+
+    // Status Colors
+    success: '#87D2A2',
+    successBg: '#1C3829',
+    successBorder: '#2E553F',
+
+    warning: '#EABC76',
+    warningBg: '#3B2A16',
+    warningBorder: '#5F4425',
+
+    error: '#E79C92',
+    errorBg: '#3D1C1A',
+    errorBorder: '#632F2B',
+
+    info: '#DFF19B',
+    infoBg: '#2D3A20',
+    infoBorder: '#485C34',
 
     // Verified Official Badge
-    verified: '#2DD4BF',
-    verifiedBg: '#134E4A',
+    verified: '#87D2A2',
+    verifiedBg: '#1C3829',
 
-    // Offline / Sync indicators
-    synced: '#2DD4BF',
-    pendingSync: '#FBBF24',
-    offline: '#94A3B8'
-  }
+    // Offline / Sync Indicators
+    synced: '#87D2A2',
+    pendingSync: '#EABC76',
+    offline: '#B5C1B1',
+  },
 } as const;
 
 export type ColorTheme = typeof colors.light;

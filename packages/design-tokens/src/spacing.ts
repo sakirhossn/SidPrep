@@ -28,9 +28,16 @@ export const radii = {
   sm: 4,
   base: 8,
   md: 12,
-  lg: 16,
+  lg: 18,
   xl: 24,
-  full: 9999
+  full: 9999,
+  // v2 Ink & Moss semantic tokens
+  chip: 7,
+  input: 12,
+  action: 12,
+  card: 18,
+  hero: 19,
+  sheet: 24,
 } as const;
 
 export const elevations = {

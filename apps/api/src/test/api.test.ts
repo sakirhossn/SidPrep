@@ -2,9 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildServer } from '../server.js';
 import { db } from '../db/index.js';
+import { signJwt } from '../lib/security.js';
 
 describe('SidPrep 2.0 Shared API Test Suite', async () => {
   const app = await buildServer();
+  const testAdminToken = signJwt({ sub: 'adm_1', email: 'admin@sidprep.in', role: 'SUPER_ADMIN' }, '1h');
 
   it('1. Health check returns 200 with operational checks and brevo quota', async () => {
     const res = await app.inject({
@@ -20,10 +22,21 @@ describe('SidPrep 2.0 Shared API Test Suite', async () => {
     assert.ok(res.headers['x-request-id']);
   });
 
-  it('2. Quota dashboard correctly reports free-tier metrics', async () => {
+  it('2. Quota dashboard enforces admin authentication and reports free-tier metrics', async () => {
+    // 2a. Unauthenticated read must fail with 401 Unauthorized
+    const unauthRes = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/quotas',
+    });
+    assert.equal(unauthRes.statusCode, 401);
+
+    // 2b. Authenticated staff read succeeds with 200 OK
     const res = await app.inject({
       method: 'GET',
       url: '/v1/admin/quotas',
+      headers: {
+        authorization: `Bearer ${testAdminToken}`,
+      },
     });
 
     assert.equal(res.statusCode, 200);

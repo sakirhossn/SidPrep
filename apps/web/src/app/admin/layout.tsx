@@ -30,15 +30,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [adminUser, setAdminUser] = useState<{ name: string; role: string; email: string } | null>(null);
 
   useEffect(() => {
-    // Check if on login page
     if (pathname === '/admin/login') return;
 
-    // Load user session
-    const stored = localStorage.getItem('sidprep_admin_user');
-    if (!stored) {
+    const token = sessionStorage.getItem('sidprep_admin_token');
+    const stored = sessionStorage.getItem('sidprep_admin_user');
+    if (!token || !stored) {
       router.push('/admin/login');
     } else {
-      setAdminUser(JSON.parse(stored));
+      try {
+        setAdminUser(JSON.parse(stored));
+      } catch {
+        sessionStorage.clear();
+        router.push('/admin/login');
+      }
     }
   }, [pathname, router]);
 
@@ -62,8 +66,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   ];
 
   const handleLogout = () => {
-    localStorage.removeItem('sidprep_admin_token');
-    localStorage.removeItem('sidprep_admin_user');
+    sessionStorage.removeItem('sidprep_admin_token');
+    sessionStorage.removeItem('sidprep_admin_user');
     router.push('/admin/login');
   };
 

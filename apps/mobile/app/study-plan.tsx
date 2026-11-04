@@ -112,9 +112,13 @@ export default function StudyPlanScreen() {
 
   const toggleTask = (taskId: string) => {
     if (!plan) return;
+    const task = plan.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    const targetState = !task.isCompleted;
+
     const updatedTasks = plan.tasks.map(t => {
       if (t.id === taskId) {
-        return { ...t, isCompleted: !t.isCompleted };
+        return { ...t, isCompleted: targetState };
       }
       return t;
     });
@@ -129,6 +133,11 @@ export default function StudyPlanScreen() {
     };
     setPlan(updatedPlan);
     sqliteDb.setCache(CACHE_KEY_PLAN, updatedPlan);
+
+    // Sync mutation to server
+    api.updateStudyTask(taskId, targetState).catch((e) => {
+      console.warn('Study task server sync deferred (saved locally in SQLite):', e);
+    });
   };
 
   if (loading || !plan) {

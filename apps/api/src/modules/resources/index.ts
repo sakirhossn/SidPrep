@@ -87,11 +87,9 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
-   * GET /resources/:id/download
-   * Enforces strict administrative download policy
+   * Helper: Resource download ticket issuer
    */
-  fastify.get('/resources/:id/download', async (request, reply) => {
-    const { id } = request.params as { id: string };
+  const handleResourceDownload = async (id: string, request: any, reply: any) => {
     const resource = db.resources.get(id);
 
     if (!resource || !resource.isPublished) {
@@ -133,6 +131,20 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
       fileSizeBytes: resource.fileSizeBytes,
       filename: `${resource.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.${resource.fileType.toLowerCase()}`,
     });
+  };
+
+  /**
+   * GET & POST /resources/:id/download
+   * Enforces strict administrative download policy (both HTTP methods supported)
+   */
+  fastify.get('/resources/:id/download', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    return handleResourceDownload(id, request, reply);
+  });
+
+  fastify.post('/resources/:id/download', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    return handleResourceDownload(id, request, reply);
   });
 
   /**

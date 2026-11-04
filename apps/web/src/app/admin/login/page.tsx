@@ -14,31 +14,18 @@ import {
   Sparkles,
 } from 'lucide-react';
 
-const DEFAULT_ADMIN_EMAIL = 'admin@sidprep.in';
-const DEFAULT_ADMIN_PASSWORD = 'AdminSecurePass123!';
-const DEFAULT_DEV_TOTP = '123456';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
 
 export default function AdminLoginPage() {
   const router = useRouter();
   const [step, setStep] = useState<'PASSWORD' | 'TOTP'>('PASSWORD');
-  const [email, setEmail] = useState(DEFAULT_ADMIN_EMAIL);
-  const [password, setPassword] = useState(DEFAULT_ADMIN_PASSWORD);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [totpCode, setTotpCode] = useState('');
   const [preAuthToken, setPreAuthToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
-  const fillDefaultCredentials = () => {
-    setEmail(DEFAULT_ADMIN_EMAIL);
-    setPassword(DEFAULT_ADMIN_PASSWORD);
-    setError(null);
-  };
-
-  const fillDefaultTotp = () => {
-    setTotpCode(DEFAULT_DEV_TOTP);
-    setError(null);
-  };
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,7 +33,7 @@ export default function AdminLoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch('http://localhost:4000/v1/auth/admin/login', {
+      const res = await fetch(`${API_BASE}/v1/auth/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), password }),
@@ -55,36 +42,13 @@ export default function AdminLoginPage() {
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {
-        const errorMsg =
-          data?.error?.message ||
-          `Invalid admin credentials. In development mode, use email: ${DEFAULT_ADMIN_EMAIL} and password: ${DEFAULT_ADMIN_PASSWORD}`;
-        throw new Error(errorMsg);
+        throw new Error(data?.error?.message || 'Invalid administrative credentials.');
       }
 
       setPreAuthToken(data.preAuthToken);
       setStep('TOTP');
     } catch (err: any) {
-      const isNetworkError =
-        err.name === 'TypeError' ||
-        err.message?.includes('fetch') ||
-        err.message?.includes('Failed to fetch') ||
-        err.message?.includes('NetworkError');
-
-      // Local fallback for offline/client demo if backend server is not running
-      if (
-        (isNetworkError || err.message?.includes('Invalid')) &&
-        email.trim().toLowerCase() === DEFAULT_ADMIN_EMAIL.toLowerCase() &&
-        password === DEFAULT_ADMIN_PASSWORD
-      ) {
-        setPreAuthToken('mock_preauth_token');
-        setStep('TOTP');
-      } else if (isNetworkError) {
-        setError(
-          'Cannot connect to backend API server at http://localhost:4000. Please verify the API server is running.'
-        );
-      } else {
-        setError(err.message || 'Login failed. Please check your staff email and password.');
-      }
+      setError(err.message || 'Login failed. Please verify staff credentials and ensure API server is reachable.');
     } finally {
       setLoading(false);
     }
@@ -96,7 +60,7 @@ export default function AdminLoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch('http://localhost:4000/v1/auth/admin/verify-totp', {
+      const res = await fetch(`${API_BASE}/v1/auth/admin/verify-totp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ preAuthToken, totpCode: totpCode.trim() }),
@@ -104,30 +68,15 @@ export default function AdminLoginPage() {
 
       const data = await res.json().catch(() => null);
 
-      if (!res.ok && totpCode.trim() !== DEFAULT_DEV_TOTP) {
-        throw new Error(
-          data?.error?.message ||
-            `Invalid 2FA TOTP code. In development mode, enter shortcut: ${DEFAULT_DEV_TOTP}`
-        );
+      if (!res.ok) {
+        throw new Error(data?.error?.message || 'Invalid two-factor authentication TOTP code.');
       }
 
-      localStorage.setItem('sidprep_admin_token', data?.adminToken || 'mock_admin_token');
-      localStorage.setItem(
-        'sidprep_admin_user',
-        JSON.stringify({ name: 'Super Admin', role: 'SUPER_ADMIN', email: email.trim() })
-      );
+      sessionStorage.setItem('sidprep_admin_token', data.adminToken);
+      sessionStorage.setItem('sidprep_admin_user', JSON.stringify(data.admin));
       router.push('/admin');
     } catch (err: any) {
-      if (totpCode.trim() === DEFAULT_DEV_TOTP) {
-        localStorage.setItem('sidprep_admin_token', 'mock_admin_token');
-        localStorage.setItem(
-          'sidprep_admin_user',
-          JSON.stringify({ name: 'Super Admin', role: 'SUPER_ADMIN', email: email.trim() })
-        );
-        router.push('/admin');
-      } else {
-        setError(err.message || 'Verification failed. Please enter the valid 6-digit TOTP code.');
-      }
+      setError(err.message || 'Verification failed. Please enter the valid 6-digit TOTP code.');
     } finally {
       setLoading(false);
     }
@@ -219,23 +168,6 @@ export default function AdminLoginPage() {
                 </div>
               </div>
 
-              {/* Dev credentials helper badge */}
-              <div className="p-3 rounded-lg bg-slate-800/60 border border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
-                <div className="flex items-center gap-1.5 truncate">
-                  <Sparkles className="w-3.5 h-3.5 text-primary shrink-0" />
-                  <span className="truncate">
-                    Dev default: <code className="text-slate-300">admin@sidprep.in</code>
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={fillDefaultCredentials}
-                  className="text-primary hover:underline font-semibold shrink-0 ml-2"
-                >
-                  Quick Fill
-                </button>
-              </div>
-
               <button
                 type="submit"
                 disabled={loading}
@@ -269,23 +201,10 @@ export default function AdminLoginPage() {
                 />
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-800/60 border border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
-                <span>
-                  Dev Shortcut Code: <strong className="text-white">123456</strong>
-                </span>
-                <button
-                  type="button"
-                  onClick={fillDefaultTotp}
-                  className="text-primary hover:underline font-semibold"
-                >
-                  Fill Code
-                </button>
-              </div>
-
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-3 rounded-xl bg-accent-teal hover:bg-teal-600 text-white font-heading font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
+                className="w-full py-3 rounded-xl bg-primary hover:bg-primary-600 text-white font-heading font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
               >
                 {loading ? 'Verifying...' : 'Verify TOTP & Access Console'}
                 <CheckCircle2 className="w-3.5 h-3.5" />

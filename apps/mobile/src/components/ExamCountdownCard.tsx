@@ -23,15 +23,18 @@ export const ExamCountdownCard: React.FC<ExamCountdownCardProps> = ({
 }) => {
   const { theme, scaledFontSize, radii, elevations } = useTheme();
 
-  // Calculate official countdown days only if official date is present
-  const countdown = useMemo(() => {
+  // Calculate official countdown days or past completion status
+  const countdownState = useMemo<{ type: 'UPCOMING' | 'COMPLETED' | 'UNANNOUNCED'; days?: number }>(() => {
     if (!exam.isDateAnnounced || !exam.officialExamDate) {
-      return null;
+      return { type: 'UNANNOUNCED' };
     }
     const target = new Date(exam.officialExamDate).getTime();
     const now = Date.now();
     const diffDays = Math.ceil((target - now) / (1000 * 60 * 60 * 24));
-    return diffDays > 0 ? diffDays : 0;
+    if (diffDays < 0) {
+      return { type: 'COMPLETED' };
+    }
+    return { type: 'UPCOMING', days: diffDays };
   }, [exam.isDateAnnounced, exam.officialExamDate]);
 
   const openSource = () => {
@@ -101,20 +104,29 @@ export const ExamCountdownCard: React.FC<ExamCountdownCardProps> = ({
           }
         ]}
       >
-        <Calendar size={18} color={exam.isDateAnnounced ? theme.primary : theme.textMuted} />
-        {exam.isDateAnnounced && countdown !== null ? (
+        <Calendar size={18} color={countdownState.type === 'UPCOMING' ? theme.primary : theme.textMuted} />
+        {countdownState.type === 'UPCOMING' ? (
           <View style={styles.countdownContent}>
             <Text style={[styles.countdownNumber, { color: theme.primary, fontSize: scaledFontSize('base') }]}>
-              {countdown} Days Remaining
+              {countdownState.days} Days Remaining
             </Text>
             <Text style={[styles.countdownSub, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
               Exam: {new Date(exam.officialExamDate!).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
             </Text>
           </View>
+        ) : countdownState.type === 'COMPLETED' ? (
+          <View style={styles.countdownContent}>
+            <Text style={[styles.countdownNumber, { color: theme.textMuted, fontSize: scaledFontSize('base') }]}>
+              Exam Completed
+            </Text>
+            <Text style={[styles.countdownSub, { color: theme.textSubtle, fontSize: scaledFontSize('xs') }]}>
+              Conducted: {new Date(exam.officialExamDate!).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+            </Text>
+          </View>
         ) : (
           <View style={styles.countdownContent}>
             <Text style={[styles.unannouncedText, { color: theme.textMuted, fontSize: scaledFontSize('sm') }]}>
-              Official Exam Date Not Announced
+              Date Not Announced
             </Text>
             <Text style={[styles.unannouncedSub, { color: theme.textSubtle, fontSize: scaledFontSize('xs') }]}>
               Status: {exam.currentStatus.replace(/_/g, ' ')}
