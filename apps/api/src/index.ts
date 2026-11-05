@@ -12,26 +12,23 @@ async function main() {
     // Start background worker
     worker.start();
 
-    // Auto-dispatch admin credentials on boot if requested
-    if (process.env.ADMIN_DISPATCH_ON_BOOT === 'true') {
-      try {
+    // Load persisted admin credentials if available
+    try {
+      const fs = await import('node:fs');
+      const credPath = process.env.ADMIN_CREDS_FILE || './admin_credentials.json';
+      if (fs.existsSync(credPath)) {
         const { db } = await import('./db/index.js');
-        const { generateRandomPassword, hashPassword } = await import('./lib/security.js');
-        const { sendAdminCredentialsEmail } = await import('./lib/email.js');
-        const targetEmail = process.env.ADMIN_EMAIL || 'sksakirhossain8@gmail.com';
-        const newPassword = generateRandomPassword(14);
-        const newPasswordHash = await hashPassword(newPassword);
+        const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
         const admin = Array.from(db.adminUsers.values()).find(
-          (a) => a.email.toLowerCase() === targetEmail.toLowerCase()
+          (a) => a.email.toLowerCase() === creds.email?.toLowerCase()
         );
-        if (admin) {
-          admin.passwordHash = newPasswordHash;
+        if (admin && creds.passwordHash) {
+          admin.passwordHash = creds.passwordHash;
+          console.log(`[API] Restored admin password hash from ${credPath} for ${admin.email}`);
         }
-        await sendAdminCredentialsEmail(targetEmail, newPassword);
-        console.log(`[API] Admin credentials auto-dispatched to: ${targetEmail} | Temp Pass: ${newPassword}`);
-      } catch (dispatchErr: any) {
-        console.warn(`[API] Admin auto-dispatch warning: ${dispatchErr.message}`);
       }
+    } catch (fsErr: any) {
+      console.warn(`[API] Could not check persisted credentials: ${fsErr.message}`);
     }
 
     // Graceful Shutdown

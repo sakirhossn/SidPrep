@@ -33,10 +33,33 @@ async function main() {
     console.log(`[Admin Dispatch] Created new super admin record adm_1`);
   }
 
-  // 3. Send email via Brevo
+  // 3. Persist credentials to disk so running server can immediately authenticate them
+  try {
+    const fs = await import('node:fs');
+    const credPath = process.env.ADMIN_CREDS_FILE || './admin_credentials.json';
+    fs.writeFileSync(
+      credPath,
+      JSON.stringify(
+        {
+          email: targetEmail,
+          password: newPassword,
+          passwordHash: newPasswordHash,
+          updatedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+    console.log(`[Admin Dispatch] Persisted credentials to disk at: ${credPath}`);
+  } catch (fsErr: any) {
+    console.warn(`[Admin Dispatch] Could not persist to disk: ${fsErr.message}`);
+  }
+
+  // 4. Send email via Brevo
   const emailResult = await sendAdminCredentialsEmail(targetEmail, newPassword);
 
-  // 4. Output summary
+  // 5. Output summary
   console.log('\n' + '='.repeat(64));
   console.log('       SIDPREP 2.0 ADMIN CREDENTIALS INITIALIZED');
   console.log('='.repeat(64));
