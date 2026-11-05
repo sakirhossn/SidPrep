@@ -212,6 +212,20 @@ class SidPrepDatabase {
   public students = new Map<string, StudentRecord>();
   public adminUsers = new Map<string, AdminUserRecord>([
     [
+      'adm_owner',
+      {
+        id: 'adm_owner',
+        email: 'sksakirhossain8@gmail.com',
+        name: 'Sk Sakir Hossain',
+        passwordHash: DEFAULT_ADMIN_PASSWORD_HASH,
+        role: 'SUPER_ADMIN',
+        totpSecret: 'JBSWY3DPEHPK3PXP', // Base32 test secret
+        is2faEnabled: true,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    [
       'adm_1',
       {
         id: 'adm_1',
@@ -219,7 +233,7 @@ class SidPrepDatabase {
         name: 'Super Admin',
         passwordHash: DEFAULT_ADMIN_PASSWORD_HASH,
         role: 'SUPER_ADMIN',
-        totpSecret: 'JBSWY3DPEHPK3PXP', // Base32 test secret
+        totpSecret: 'JBSWY3DPEHPK3PXP',
         is2faEnabled: true,
         isActive: true,
         createdAt: new Date().toISOString(),

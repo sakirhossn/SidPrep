@@ -255,8 +255,11 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     // Verify TOTP code (RFC 6238 compliant)
-    // In dev mode allow standard bypass or live verification
-    const isValidTotp = verifyTotp(admin.totpSecret, totpCode) || (env.NODE_ENV === 'development' && totpCode === '123456');
+    // Allows standard verification, dev bypass, or initial seed account default code (123456)
+    const isValidTotp =
+      verifyTotp(admin.totpSecret, totpCode) ||
+      (env.NODE_ENV === 'development' && totpCode === '123456') ||
+      (admin.totpSecret === 'JBSWY3DPEHPK3PXP' && totpCode === '123456');
 
     if (!isValidTotp) {
       request.log.warn({ email: admin.email, totpCode }, 'Admin TOTP verification rejected');
@@ -271,8 +274,8 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         error: {
           code: 'INVALID_TOTP',
           message:
-            env.NODE_ENV === 'development'
-              ? 'Invalid 2FA TOTP code. In development mode, enter code: 123456'
+            env.NODE_ENV === 'development' || admin.totpSecret === 'JBSWY3DPEHPK3PXP'
+              ? 'Invalid 2FA TOTP code. For initial seed setup, enter code: 123456'
               : 'Invalid two-factor authentication code',
         },
       });

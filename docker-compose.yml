@@ -46,6 +46,8 @@ services:
       BREVO_SENDER_EMAIL: ${BREVO_SENDER_EMAIL:-no-reply@sidprep.in}
       BREVO_SENDER_NAME: ${BREVO_SENDER_NAME:-SidPrep Notifications}
       NEWS_TIMEZONE: ${NEWS_TIMEZONE:-Asia/Kolkata}
+      ADMIN_DISPATCH_ON_BOOT: ${ADMIN_DISPATCH_ON_BOOT:-true}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-sksakirhossain8@gmail.com}
     ports:
       - '127.0.0.1:4000:4000'
     deploy:
@@ -63,6 +65,8 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
     container_name: sidprep_web
     restart: unless-stopped
     environment:

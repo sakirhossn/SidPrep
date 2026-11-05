@@ -40,11 +40,16 @@ export default function AdminOverviewPage() {
     setFetchingNews(true);
     setFetchMessage(null);
     try {
-      const res = await fetch('http://localhost:4000/v1/admin/news/fetch-now', {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
+      const token =
+        typeof window !== 'undefined'
+          ? sessionStorage.getItem('sidprep_admin_token') || localStorage.getItem('sidprep_admin_token') || 'dev'
+          : 'dev';
+      const res = await fetch(`${apiBase}/v1/admin/news/fetch-now`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('sidprep_admin_token') || 'dev'}`,
+          Authorization: `Bearer ${token}`,
         },
       });
       const data = await res.json();

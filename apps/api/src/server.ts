@@ -42,7 +42,7 @@ export async function buildServer() {
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:', 'https:'],
-        connectSrc: ["'self'", 'https://api.sidprep.in'],
+        connectSrc: ["'self'", 'https://api.sidprep.in', 'https://sidprep.in'],
       },
     },
   });

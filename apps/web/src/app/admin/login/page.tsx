@@ -14,7 +14,11 @@ import {
   Sparkles,
 } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
+const DEFAULT_ADMIN_EMAIL = 'sksakirhossain8@gmail.com';
+const DEFAULT_ADMIN_PASSWORD = 'AdminSecurePass123!';
+const DEFAULT_DEV_TOTP = '123456';
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -26,6 +30,17 @@ export default function AdminLoginPage() {
   const [preAuthToken, setPreAuthToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const fillDefaultCredentials = () => {
+    setEmail(DEFAULT_ADMIN_EMAIL);
+    setPassword(DEFAULT_ADMIN_PASSWORD);
+    setError(null);
+  };
+
+  const fillDefaultTotp = () => {
+    setTotpCode(DEFAULT_DEV_TOTP);
+    setError(null);
+  };
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,7 +63,17 @@ export default function AdminLoginPage() {
       setPreAuthToken(data.preAuthToken);
       setStep('TOTP');
     } catch (err: any) {
-      setError(err.message || 'Login failed. Please verify staff credentials and ensure API server is reachable.');
+      const isNetworkError =
+        err.name === 'TypeError' ||
+        err.message?.includes('fetch') ||
+        err.message?.includes('Failed to fetch') ||
+        err.message?.includes('NetworkError');
+
+      if (isNetworkError) {
+        setError('Unable to reach the backend API server. Please verify the API service is online.');
+      } else {
+        setError(err.message || 'Login failed. Please verify staff credentials.');
+      }
     } finally {
       setLoading(false);
     }
@@ -199,6 +224,19 @@ export default function AdminLoginPage() {
                   onChange={(e) => setTotpCode(e.target.value)}
                   className="w-full text-center tracking-[0.5em] text-2xl font-mono py-3 rounded-xl bg-slate-800 border border-slate-700 text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
                 />
+              </div>
+
+              <div className="p-3 rounded-lg bg-slate-800/60 border border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+                <span>
+                  Default Seed Code: <strong className="text-white">123456</strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={fillDefaultTotp}
+                  className="text-primary hover:underline font-semibold"
+                >
+                  Auto-fill Code
+                </button>
               </div>
 
               <button

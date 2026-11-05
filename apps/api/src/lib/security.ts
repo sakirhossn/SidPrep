@@ -33,6 +33,19 @@ export async function verifyPassword(password: string, combinedHash: string): Pr
 }
 
 /**
+ * Generate a cryptographically secure random password
+ */
+export function generateRandomPassword(length = 14): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*';
+  const bytes = crypto.randomBytes(length);
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars[bytes[i] % chars.length];
+  }
+  return result;
+}
+
+/**
  * Generate 6-digit numeric OTP with cryptographically secure randomness
  */
 export function generateOtp(): string {

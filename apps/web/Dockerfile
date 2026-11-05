@@ -12,6 +12,9 @@ COPY pnpm-lock.yaml* pnpm-workspace.yaml package.json ./
 COPY packages ./packages
 COPY apps/web ./apps/web
 RUN pnpm install --frozen-lockfile || pnpm install
+ARG NEXT_PUBLIC_API_URL=""
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 RUN pnpm --filter @sidprep/contracts build
 RUN pnpm --filter @sidprep/design-tokens build
 RUN pnpm --filter @sidprep/ui build

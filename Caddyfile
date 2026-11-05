@@ -34,11 +34,24 @@ sidprep.in {
         X-Robots-Tag "noindex, nofollow"
     }
 
-    reverse_proxy web:3000 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
+    # 1. Reverse-proxy /v1 API calls directly to the Fastify API container
+    handle /v1/* {
+        reverse_proxy api:4000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # 2. Reverse-proxy web & admin SSR pages to Next.js container
+    handle {
+        reverse_proxy web:3000 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
     }
 
     # Global Security Headers
