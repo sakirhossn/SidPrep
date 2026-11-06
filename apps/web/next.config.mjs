@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'standalone',
+  output: process.env.BUILD_STANDALONE === 'true' || process.platform === 'linux' ? 'standalone' : undefined,
   reactStrictMode: true,
   async rewrites() {
     const rawApiUrl = process.env.INTERNAL_API_URL || process.env.API_URL || 'http://localhost:4000/v1';

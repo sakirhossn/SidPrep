@@ -1,3 +1,4 @@
+import { getPlatformOS } from '../services/platform';
 import { secureStorage } from '../services/secureStorage';
 import { telemetry } from '../services/telemetry';
 import {
@@ -25,9 +26,7 @@ import {
 } from '@sidprep/contracts';
 
 function resolveDefaultApiUrl(): string {
-  if (process.env.EXPO_PUBLIC_API_URL) {
-    return process.env.EXPO_PUBLIC_API_URL;
-  }
+  let url = process.env.EXPO_PUBLIC_API_URL || '';
   if (typeof process !== 'undefined' && process.env['NODE_ENV'] === 'test') {
     return 'https://api.sidprep.in/v1';
   }
@@ -42,7 +41,17 @@ function resolveDefaultApiUrl(): string {
       }
     }
   } catch {}
-  return 'http://localhost:4000/v1';
+
+  if (!url) {
+    url = 'http://localhost:4000/v1';
+  }
+
+  // Self-healing Android emulator loopback: Android treats localhost as device self
+  if (getPlatformOS() === 'android' && (url.includes('localhost') || url.includes('127.0.0.1'))) {
+    url = url.replace('localhost', '10.0.2.2').replace('127.0.0.1', '10.0.2.2');
+  }
+
+  return url;
 }
 
 export class ApiError extends Error {
@@ -374,6 +383,23 @@ export class SidPrepApiClient {
     return this.request<ResourceDownloadTicketResponse>(`/resources/${resourceId}/download`, {
       method: 'POST'
     });
+  }
+
+  // 8. In-App Updates & Version Health Check
+  async checkAppVersion(): Promise<{
+    currentVersion: string;
+    minVersion: string;
+    apkUrl: string;
+    releaseNotes: string;
+    publishedAt: string;
+  }> {
+    return this.request<{
+      currentVersion: string;
+      minVersion: string;
+      apkUrl: string;
+      releaseNotes: string;
+      publishedAt: string;
+    }>('/app/version');
   }
 }
 

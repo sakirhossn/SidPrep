@@ -42,12 +42,26 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
       ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://sidprep.in,https://api.sidprep.in}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-r2}
+      STORAGE_LOCAL_DIR: ${STORAGE_LOCAL_DIR:-./uploads}
+      R2_ENDPOINT: ${R2_ENDPOINT:-https://cbf7a4a2f0c78ae217205ffb1064ea54.r2.cloudflarestorage.com}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-1ffe7c761ee357af0998ece167f0ce6e}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-5a8e1264ec4ab149ecafb317eb1397ea8c0b9e9810109c87d8ca7733ba58e661}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-sidprep-cdn-prod}
+      R2_PUBLIC_DOMAIN: ${R2_PUBLIC_DOMAIN:-https://cdn.sidprep.in}
+      R2_MONTHLY_QUOTA_BYTES: ${R2_MONTHLY_QUOTA_BYTES:-10737418240}
+      BREVO_SMTP_HOST: ${BREVO_SMTP_HOST:-smtp-relay.brevo.com}
+      BREVO_SMTP_PORT: ${BREVO_SMTP_PORT:-587}
+      BREVO_SMTP_USER: ${BREVO_SMTP_USER:-c0cb63001@smtp-brevo.com}
+      BREVO_SMTP_PASS: ${BREVO_SMTP_PASS:-xsmtpsib-97074ae277161f493015be656141d02456dbb898dce704165e72d529213940fd-LSNXeocw1KG8vYNm}
       BREVO_API_KEY: ${BREVO_API_KEY:-xkeysib-mock-local}
-      BREVO_SENDER_EMAIL: ${BREVO_SENDER_EMAIL:-no-reply@sidprep.in}
+      BREVO_SENDER_EMAIL: ${BREVO_SENDER_EMAIL:-c0cb63001@smtp-brevo.com}
       BREVO_SENDER_NAME: ${BREVO_SENDER_NAME:-SidPrep Notifications}
       NEWS_TIMEZONE: ${NEWS_TIMEZONE:-Asia/Kolkata}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-sksakirhossain8@gmail.com}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-AdminSecurePass123!}
+    volumes:
+      - ./uploads:/app/apps/api/uploads
     ports:
       - '127.0.0.1:4000:4000'
     deploy:
@@ -73,6 +87,7 @@ services:
       NODE_ENV: production
       PORT: 3000
       API_URL: http://api:4000/v1
+      INTERNAL_API_URL: http://api:4000/v1
     ports:
       - '127.0.0.1:3000:3000'
     deploy:

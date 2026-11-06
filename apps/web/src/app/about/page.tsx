@@ -1,6 +1,44 @@
 import { PublicShell } from '@/components/public-shell';
 
-export default function AboutPage() {
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+
+async function getAboutContent() {
+  try {
+    const res = await fetch(`${API_BASE}/v1/pages/about`, {
+      next: { revalidate: 60 },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export default async function AboutPage() {
+  const dynamicPage = await getAboutContent();
+
+  if (dynamicPage && dynamicPage.contentHtml) {
+    return (
+      <PublicShell>
+        <div className="py-16 md:py-24 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <h1 className="font-heading font-extrabold text-3xl sm:text-4xl text-slate-900 mb-3">
+            {dynamicPage.title}
+          </h1>
+          {dynamicPage.subtitle && (
+            <p className="text-base text-slate-600 mb-8 leading-relaxed font-medium">
+              {dynamicPage.subtitle}
+            </p>
+          )}
+          <div
+            className="prose prose-slate max-w-none text-sm leading-relaxed space-y-6 text-slate-700"
+            dangerouslySetInnerHTML={{ __html: dynamicPage.contentHtml }}
+          />
+        </div>
+      </PublicShell>
+    );
+  }
+
+  // Static Fallback
   return (
     <PublicShell>
       <div className="py-16 md:py-24 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">

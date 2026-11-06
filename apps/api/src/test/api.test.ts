@@ -196,4 +196,155 @@ describe('SidPrep 2.0 Shared API Test Suite', async () => {
     assert.ok(latestEvent.action);
     assert.ok(latestEvent.createdAt);
   });
+
+  it('8. Admin 2FA Email OTP and Master Credentials Login', async () => {
+    // Step 1: Login with owner email
+    const loginRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/admin/login',
+      payload: {
+        email: 'sksakirhossain8@gmail.com',
+        password: 'AdminSecurePass123!',
+      },
+    });
+    assert.equal(loginRes.statusCode, 200);
+    const { preAuthToken } = JSON.parse(loginRes.body);
+    assert.ok(preAuthToken);
+
+    // Step 2: Request 2FA OTP via Brevo Email
+    const emailOtpRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/admin/send-email-otp',
+      payload: { preAuthToken },
+    });
+    assert.equal(emailOtpRes.statusCode, 200);
+    const emailOtpBody = JSON.parse(emailOtpRes.body);
+    assert.equal(emailOtpBody.success, true);
+    assert.ok(emailOtpBody.devOtpHint);
+
+    // Step 3: Verify using the emailed OTP
+    const verifyTotpRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/admin/verify-totp',
+      payload: {
+        preAuthToken,
+        totpCode: emailOtpBody.devOtpHint,
+      },
+    });
+    assert.equal(verifyTotpRes.statusCode, 200);
+    const verifyTotpBody = JSON.parse(verifyTotpRes.body);
+    assert.equal(verifyTotpBody.success, true);
+    assert.ok(verifyTotpBody.adminToken);
+    assert.equal(verifyTotpBody.email, 'sksakirhossain8@gmail.com');
+  });
+
+  it('9. Website Page CMS: Create, Fetch, and Update dynamic page', async () => {
+    const adminToken = testAdminToken;
+
+    // Create custom page
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/pages',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: {
+        title: 'Syllabus Breakdown 2026',
+        slug: 'syllabus-breakdown-2026',
+        subtitle: 'Comprehensive topics list for SSC and RRB',
+        contentHtml: '<p>Complete topic-wise weightage and breakdown.</p>',
+        isPublished: true,
+      },
+    });
+    assert.equal(createRes.statusCode, 201);
+    const createdPage = JSON.parse(createRes.body).page;
+    assert.equal(createdPage.slug, 'syllabus-breakdown-2026');
+
+    // Fetch public page
+    const publicRes = await app.inject({
+      method: 'GET',
+      url: '/v1/pages/syllabus-breakdown-2026',
+    });
+    assert.equal(publicRes.statusCode, 200);
+    const publicPage = JSON.parse(publicRes.body);
+    assert.equal(publicPage.title, 'Syllabus Breakdown 2026');
+
+    // System pages seeded: verify /about exists
+    const aboutRes = await app.inject({
+      method: 'GET',
+      url: '/v1/pages/about',
+    });
+    assert.equal(aboutRes.statusCode, 200);
+    assert.equal(JSON.parse(aboutRes.body).slug, 'about');
+  });
+
+  it('10. Admin Profile & Password Change workflow', async () => {
+    const adminToken = testAdminToken;
+
+    // Read profile
+    const profileRes = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/profile',
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(profileRes.statusCode, 200);
+    const profile = JSON.parse(profileRes.body);
+    assert.equal(profile.email, 'admin@sidprep.in');
+
+    // Change password
+    const pwdRes = await app.inject({
+      method: 'PUT',
+      url: '/v1/admin/profile/password',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: {
+        currentPassword: 'AdminSecurePass123!',
+        newPassword: 'BrandNewSecurePassword2026!',
+      },
+    });
+    assert.equal(pwdRes.statusCode, 200);
+    assert.equal(JSON.parse(pwdRes.body).success, true);
+  });
+
+  it('11. App Version & Automatic Update Checker endpoint', async () => {
+    // Public endpoint for mobile clients
+    const versionRes = await app.inject({
+      method: 'GET',
+      url: '/v1/app/version',
+    });
+    assert.equal(versionRes.statusCode, 200);
+    const version = JSON.parse(versionRes.body);
+    assert.equal(version.success, true);
+    assert.equal(version.currentVersion, '2.0.1');
+    assert.ok(version.apkUrl);
+  });
+
+  it('12. Purge Demo Data endpoint preserves taxonomy & staff', async () => {
+    const adminToken = testAdminToken;
+
+    const purgeRes = await app.inject({
+      method: 'POST',
+      url: '/v1/admin/maintenance/purge-demo',
+      headers: { authorization: `Bearer ${adminToken}` },
+      payload: {
+        clearQuestions: true,
+        clearTests: true,
+        clearNews: true,
+        clearResources: false,
+        clearAttempts: true,
+        clearStudents: false,
+      },
+    });
+
+    assert.equal(purgeRes.statusCode, 200);
+    const purgeBody = JSON.parse(purgeRes.body);
+    assert.equal(purgeBody.success, true);
+    assert.ok(purgeBody.clearedCount > 0);
+
+    // Verify questions and tests were cleared
+    assert.equal(db.questions.size, 0);
+    assert.equal(db.tests.size, 0);
+
+    // Verify official exams taxonomy was preserved
+    assert.ok(db.exams.size > 0);
+    // Verify staff was preserved
+    assert.ok(db.adminUsers.size > 0);
+  });
 });

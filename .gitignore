@@ -29,3 +29,6 @@ Thumbs.db
 .expo/
 uploads/
 coverage/
+
+admin_credentials.json
+apps/api/admin_credentials.json

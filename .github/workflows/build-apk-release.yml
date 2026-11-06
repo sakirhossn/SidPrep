@@ -2,14 +2,20 @@ name: Build Android APK & GitHub Release
 
 on:
   push:
+    branches:
+      - main
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/**'
+      - '.github/workflows/**'
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release Tag (e.g., v2.0.0)'
-        required: true
-        default: 'v2.0.0'
+        description: 'Release Tag (e.g., v2.0.1)'
+        required: false
+        default: 'v2.0.1'
 
 permissions:
   contents: write
@@ -71,9 +77,13 @@ jobs:
 
       - name: Locate, Sign and Rename APK
         run: |
+          PKG_VERSION=$(node -p "require('./apps/mobile/package.json').version")
           TAG_NAME="${{ github.ref_name }}"
           if [ -z "$TAG_NAME" ] || [[ "$TAG_NAME" == *"main"* ]]; then
-            TAG_NAME="${{ github.event.inputs.release_tag || 'v2.0.0' }}"
+            TAG_NAME="${{ github.event.inputs.release_tag || '' }}"
+            if [ -z "$TAG_NAME" ]; then
+              TAG_NAME="v${PKG_VERSION}"
+            fi
           fi
           
           # Find release APK, preferring signed over unsigned
@@ -104,42 +114,49 @@ jobs:
           
           mkdir -p release-artifacts
           cp "$APK_PATH" "release-artifacts/SidPrep-Student-${TAG_NAME}.apk"
+          cp "$APK_PATH" "release-artifacts/SidPrep-Student-release.apk"
           echo "OUTPUT_APK=release-artifacts/SidPrep-Student-${TAG_NAME}.apk" >> $GITHUB_ENV
+          echo "LATEST_APK=release-artifacts/SidPrep-Student-release.apk" >> $GITHUB_ENV
           echo "RESOLVED_TAG=${TAG_NAME}" >> $GITHUB_ENV
 
       - name: Upload APK as Workflow Artifact
         uses: actions/upload-artifact@v4
         with:
           name: SidPrep-Student-APK
-          path: ${{ env.OUTPUT_APK }}
+          path: |
+            ${{ env.OUTPUT_APK }}
+            ${{ env.LATEST_APK }}
           retention-days: 30
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.RESOLVED_TAG }}
           name: SidPrep ${{ env.RESOLVED_TAG }} — Student Android App & System Release
           body: |
-            ### SidPrep 2.0 Official Student Android Release
+            ### SidPrep ${{ env.RESOLVED_TAG }} Official Student Android Release
             
             **Release Tag:** `${{ env.RESOLVED_TAG }}`
             **Architecture:** Android-first (Universal standalone APK)
             **Design System:** Ink & Moss v2 (#28563F, #1E3C2C, #DFF19B, #F7F7F2)
             
             #### Features Included in this Build:
-            - **Verified Exam Countdown & Official Dates** (SSC CGL 2026, RRB NTPC, State PSCs)
-            - **Offline-Aware Test Runner** with monotonic SQLite answer sync
-            - **Question Palette & Authoritative Scoring** (+2.0 / -0.5 negative marking)
-            - **Daily Current Affairs Briefs** with verified source citations
-            - **Daily Study Plan** with cross-device sync
-            - **Educational Document Viewer** with preview/download gating
+            - **Automatic Updates Integration** — Mobile client queries `/v1/app/version` and automatically prompts / downloads new APK builds.
+            - **Brevo SMTP Verification** — 6-digit email OTPs for passwordless student sign-in and registration.
+            - **Dynamic Page CMS** — Access all updated study guides, announcements, and commission notifications.
+            - **Offline-Aware Test Runner** with monotonic SQLite answer sync.
+            - **Question Palette & Authoritative Scoring** (+2.0 / -0.5 negative marking).
+            - **Daily Current Affairs Briefs** with verified source citations.
+            - **Educational Document Viewer** with preview/download gating.
             
             #### Installation:
             1. Download `SidPrep-Student-${{ env.RESOLVED_TAG }}.apk` below to your Android device.
             2. Tap to install (enable "Install Unknown Apps" for your browser if prompted).
-          files: ${{ env.OUTPUT_APK }}
+          files: |
+            ${{ env.OUTPUT_APK }}
+            ${{ env.LATEST_APK }}
           draft: false
           prerelease: false

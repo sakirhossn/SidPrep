@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import crypto from 'node:crypto';
 import { db, ResourceRecord } from '../../db/index.js';
+import { env } from '../../config/index.js';
 import { validateFileMagicBytes, verifyJwt } from '../../lib/security.js';
 import { ResourceCreateSchema } from '@sidprep/contracts';
 
@@ -125,8 +126,13 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
       meta: { expiresAt, ip: request.ip },
     });
 
+    const downloadUrl =
+      env.STORAGE_DRIVER === 'r2'
+        ? `${env.R2_PUBLIC_DOMAIN.replace(/\/+$/, '')}/${resource.storagePath.replace(/^\/+/, '')}`
+        : `https://api.sidprep.in/v1/downloads/stream/${resource.id}?token=${token}`;
+
     return reply.send({
-      downloadUrl: `https://api.sidprep.in/v1/downloads/stream/${resource.id}?token=${token}`,
+      downloadUrl,
       expiresAt,
       fileSizeBytes: resource.fileSizeBytes,
       filename: `${resource.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.${resource.fileType.toLowerCase()}`,

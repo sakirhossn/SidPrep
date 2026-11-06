@@ -1,7 +1,23 @@
+'use client';
+
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Newspaper, FileText, Smartphone, ArrowRight } from 'lucide-react';
+import { Newspaper, FileText, Smartphone, ArrowRight, User, LogOut, LayoutDashboard } from 'lucide-react';
+import { getStudentUser, clearStudentSession, StudentUser } from '@/lib/auth';
 
 export function PublicHeader() {
+  const [student, setStudent] = useState<StudentUser | null>(null);
+
+  useEffect(() => {
+    setStudent(getStudentUser());
+  }, []);
+
+  const handleLogout = () => {
+    clearStudentSession();
+    setStudent(null);
+    window.location.href = '/';
+  };
+
   return (
     <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -56,15 +72,48 @@ export function PublicHeader() {
           </Link>
         </nav>
 
-        {/* Action Buttons */}
+        {/* Action Buttons / Auth State */}
         <div className="flex items-center gap-3">
-          <Link
-            href="/app"
-            className="inline-flex items-center gap-2 text-xs font-bold text-white bg-primary hover:bg-primary-600 px-4 py-2.5 rounded-xl shadow-sm hover:shadow transition-all"
-          >
-            Get Student App
-            <ArrowRight className="w-3.5 h-3.5" />
-          </Link>
+          {student ? (
+            <div className="flex items-center gap-3">
+              <Link
+                href="/dashboard"
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-xl transition-colors"
+              >
+                <LayoutDashboard className="w-3.5 h-3.5 text-primary" />
+                <span className="hidden sm:inline">Dashboard</span>
+              </Link>
+
+              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-primary/10 text-primary text-xs font-semibold">
+                <User className="w-3.5 h-3.5" />
+                <span className="max-w-[120px] truncate">{student.email.split('@')[0]}</span>
+              </div>
+
+              <button
+                onClick={handleLogout}
+                title="Sign Out"
+                className="p-2 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Link
+                href="/login"
+                className="text-xs font-semibold text-slate-700 hover:text-primary px-3 py-2 rounded-xl transition-colors"
+              >
+                Sign In
+              </Link>
+              <Link
+                href="/login"
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-white bg-primary hover:bg-primary-600 px-4 py-2.5 rounded-xl shadow-sm hover:shadow transition-all"
+              >
+                Get Started
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     </header>

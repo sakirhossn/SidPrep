@@ -5,6 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from '../src/context/ThemeContext';
 import { ConnectivityProvider } from '../src/context/ConnectivityContext';
 import { AuthProvider } from '../src/context/AuthContext';
+import { AutoUpdateChecker } from '../src/components/AutoUpdateChecker';
 
 function RootNavigation() {
   const { isDark, theme } = useTheme();
@@ -12,6 +13,7 @@ function RootNavigation() {
   return (
     <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
+      <AutoUpdateChecker />
       <Stack
         screenOptions={{
           headerShown: false,

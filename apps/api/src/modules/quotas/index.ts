@@ -72,6 +72,9 @@ export const quotaRoutes: FastifyPluginAsync = async (fastify) => {
           safetyBufferPct: 15,
         },
         cloudflareR2: {
+          driver: env.STORAGE_DRIVER,
+          bucket: env.R2_BUCKET_NAME,
+          publicDomain: env.R2_PUBLIC_DOMAIN,
           monthlyFreeAllowanceGb: 10,
           usedBytes: totalResourceBytes,
           usedMb: Math.round((totalResourceBytes / 1024 / 1024) * 100) / 100,

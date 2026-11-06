@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Shield,
@@ -11,7 +11,9 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
-  Sparkles,
+  Mail,
+  RefreshCw,
+  Server,
 } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
@@ -29,7 +31,23 @@ export default function AdminLoginPage() {
   const [totpCode, setTotpCode] = useState('');
   const [preAuthToken, setPreAuthToken] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
+  const [apiOnline, setApiOnline] = useState<boolean | null>(null);
+
+  // Check backend server connectivity on mount
+  useEffect(() => {
+    const checkServer = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/v1/app/version`, { cache: 'no-store' });
+        setApiOnline(res.ok);
+      } catch {
+        setApiOnline(false);
+      }
+    };
+    checkServer();
+  }, []);
 
   const fillDefaultCredentials = () => {
     setEmail(DEFAULT_ADMIN_EMAIL);
@@ -45,6 +63,7 @@ export default function AdminLoginPage() {
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccessMsg(null);
     setLoading(true);
 
     try {
@@ -70,7 +89,7 @@ export default function AdminLoginPage() {
         err.message?.includes('NetworkError');
 
       if (isNetworkError) {
-        setError('Unable to reach the backend API server. Please verify the API service is online.');
+        setError('Unable to reach the backend API server. Please verify the API service is online on port 4000.');
       } else {
         setError(err.message || 'Login failed. Please verify staff credentials.');
       }
@@ -79,9 +98,36 @@ export default function AdminLoginPage() {
     }
   };
 
+  const handleSendEmailOtp = async () => {
+    setError(null);
+    setSuccessMsg(null);
+    setEmailSending(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/v1/auth/admin/send-email-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preAuthToken, email: email.trim(), password }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw new Error(data?.error?.message || 'Failed to dispatch email OTP.');
+      }
+
+      setSuccessMsg(data.message || 'Verification code dispatched to your email via Brevo SMTP.');
+    } catch (err: any) {
+      setError(err.message || 'Could not send 2FA email. Please use your authenticator app code.');
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
   const handleTotpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccessMsg(null);
     setLoading(true);
 
     try {
@@ -97,8 +143,18 @@ export default function AdminLoginPage() {
         throw new Error(data?.error?.message || 'Invalid two-factor authentication TOTP code.');
       }
 
+      const adminUser = data.admin || {
+        id: data.id || 'adm_owner',
+        name: data.name || 'Sk Sakir Hossain',
+        role: data.role || 'SUPER_ADMIN',
+        email: data.email || email,
+      };
+
       sessionStorage.setItem('sidprep_admin_token', data.adminToken);
-      sessionStorage.setItem('sidprep_admin_user', JSON.stringify(data.admin));
+      sessionStorage.setItem('sidprep_admin_user', JSON.stringify(adminUser));
+      localStorage.setItem('sidprep_admin_token', data.adminToken);
+      localStorage.setItem('sidprep_admin_user', JSON.stringify(adminUser));
+
       router.push('/admin');
     } catch (err: any) {
       setError(err.message || 'Verification failed. Please enter the valid 6-digit TOTP code.');
@@ -111,7 +167,7 @@ export default function AdminLoginPage() {
     <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
       <div className="max-w-md w-full">
         {/* Header */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <div className="w-12 h-12 rounded-2xl bg-primary flex items-center justify-center text-white mx-auto mb-3 shadow-lg shadow-primary/20">
             <Shield className="w-6 h-6" />
           </div>
@@ -121,6 +177,23 @@ export default function AdminLoginPage() {
           <p className="text-xs text-slate-400 mt-1">
             Protected Staff CMS • Role-Based Access & Mandatory 2FA
           </p>
+
+          {/* Connection status indicator */}
+          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-[11px]">
+            <Server className="w-3 h-3 text-slate-400" />
+            <span className="text-slate-400">Backend Server:</span>
+            {apiOnline === null ? (
+              <span className="text-slate-500">Checking...</span>
+            ) : apiOnline ? (
+              <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Online
+              </span>
+            ) : (
+              <span className="text-red-400 font-semibold flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span> Offline (Port 4000)
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Card */}
@@ -146,6 +219,13 @@ export default function AdminLoginPage() {
             </div>
           )}
 
+          {successMsg && (
+            <div className="mb-5 p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">{successMsg}</span>
+            </div>
+          )}
+
           {step === 'PASSWORD' ? (
             <form onSubmit={handlePasswordSubmit} className="space-y-4">
               <div>
@@ -156,6 +236,7 @@ export default function AdminLoginPage() {
                   type="email"
                   required
                   value={email}
+                  placeholder="admin@sidprep.in"
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
                 />
@@ -193,6 +274,17 @@ export default function AdminLoginPage() {
                 </div>
               </div>
 
+              <div className="p-3 rounded-lg bg-slate-800/60 border border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+                <span>Default: <strong className="text-white">sksakirhossain8@gmail.com</strong></span>
+                <button
+                  type="button"
+                  onClick={fillDefaultCredentials}
+                  className="text-primary hover:underline font-semibold"
+                >
+                  Quick Fill
+                </button>
+              </div>
+
               <button
                 type="submit"
                 disabled={loading}
@@ -207,10 +299,10 @@ export default function AdminLoginPage() {
               <div className="text-center py-2">
                 <KeyRound className="w-8 h-8 text-primary mx-auto mb-2" />
                 <h3 className="font-heading font-bold text-sm text-white">
-                  Enter 6-Digit Authenticator Code
+                  Enter 6-Digit 2FA Code
                 </h3>
                 <p className="text-[11px] text-slate-400">
-                  Open Google Authenticator or Authy to retrieve your current TOTP token.
+                  Use Google Authenticator or request a code directly to your email.
                 </p>
               </div>
 
@@ -224,6 +316,28 @@ export default function AdminLoginPage() {
                   onChange={(e) => setTotpCode(e.target.value)}
                   className="w-full text-center tracking-[0.5em] text-2xl font-mono py-3 rounded-xl bg-slate-800 border border-slate-700 text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
                 />
+              </div>
+
+              {/* Brevo Email OTP Option */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleSendEmailOtp}
+                  disabled={emailSending}
+                  className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-200 text-xs font-medium flex items-center justify-center gap-2 transition-all"
+                >
+                  {emailSending ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
+                      Dispatching email via Brevo...
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="w-3.5 h-3.5 text-primary" />
+                      Send 2FA Code to My Email (Brevo)
+                    </>
+                  )}
+                </button>
               </div>
 
               <div className="p-3 rounded-lg bg-slate-800/60 border border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
@@ -244,7 +358,7 @@ export default function AdminLoginPage() {
                 disabled={loading}
                 className="w-full py-3 rounded-xl bg-primary hover:bg-primary-600 text-white font-heading font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
               >
-                {loading ? 'Verifying...' : 'Verify TOTP & Access Console'}
+                {loading ? 'Verifying...' : 'Verify & Access Console'}
                 <CheckCircle2 className="w-3.5 h-3.5" />
               </button>
 
@@ -253,6 +367,7 @@ export default function AdminLoginPage() {
                 onClick={() => {
                   setStep('PASSWORD');
                   setError(null);
+                  setSuccessMsg(null);
                 }}
                 className="w-full py-2 text-slate-400 hover:text-white text-xs flex items-center justify-center gap-1.5 transition-colors"
               >

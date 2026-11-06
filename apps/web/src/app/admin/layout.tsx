@@ -21,6 +21,9 @@ import {
   X,
   Search,
   ExternalLink,
+  Globe,
+  Trash2,
+  User,
 } from 'lucide-react';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -32,8 +35,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   useEffect(() => {
     if (pathname === '/admin/login') return;
 
-    const token = sessionStorage.getItem('sidprep_admin_token');
-    const stored = sessionStorage.getItem('sidprep_admin_user');
+    const token =
+      sessionStorage.getItem('sidprep_admin_token') ||
+      localStorage.getItem('sidprep_admin_token');
+    const stored =
+      sessionStorage.getItem('sidprep_admin_user') ||
+      localStorage.getItem('sidprep_admin_user');
     if (!token || !stored) {
       router.push('/admin/login');
     } else {
@@ -41,6 +48,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         setAdminUser(JSON.parse(stored));
       } catch {
         sessionStorage.clear();
+        localStorage.removeItem('sidprep_admin_token');
+        localStorage.removeItem('sidprep_admin_user');
         router.push('/admin/login');
       }
     }
@@ -52,6 +61,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const navItems = [
     { label: 'Overview', href: '/admin', icon: LayoutDashboard },
+    { label: 'Website CMS Pages', href: '/admin/pages', icon: Globe },
     { label: 'Exams & Patterns', href: '/admin/exams', icon: GraduationCap },
     { label: 'Taxonomy', href: '/admin/taxonomy', icon: FolderTree },
     { label: 'Question Bank', href: '/admin/questions', icon: HelpCircle },
@@ -59,6 +69,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     { label: 'Current Affairs CMS', href: '/admin/current-affairs', icon: Newspaper },
     { label: 'Document Library', href: '/admin/resources', icon: HardDrive },
     { label: 'Student Directory', href: '/admin/users', icon: Users },
+    { label: 'Database Maintenance', href: '/admin/maintenance', icon: Trash2 },
+    { label: 'Admin Profile', href: '/admin/profile', icon: User },
     { label: 'Notifications & Email', href: '/admin/notifications', icon: BellRing },
     { label: '3-Layer Logs', href: '/admin/logs', icon: ScrollText },
     { label: 'Free-Tier Quotas', href: '/admin/quotas', icon: Gauge },
@@ -68,6 +80,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const handleLogout = () => {
     sessionStorage.removeItem('sidprep_admin_token');
     sessionStorage.removeItem('sidprep_admin_user');
+    localStorage.removeItem('sidprep_admin_token');
+    localStorage.removeItem('sidprep_admin_user');
     router.push('/admin/login');
   };
 
@@ -133,10 +147,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         {/* User Card & Logout */}
         <div className="pt-4 mt-4 border-t border-slate-800">
           <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-800/40 mb-2">
-            <div className="overflow-hidden pr-2">
-              <div className="text-xs font-bold text-white truncate">{adminUser?.name || 'Administrator'}</div>
+            <Link href="/admin/profile" className="overflow-hidden pr-2 flex-1 group" title="Manage Profile & Password">
+              <div className="text-xs font-bold text-white truncate group-hover:text-primary transition-colors">
+                {adminUser?.name || 'Administrator'}
+              </div>
               <div className="text-[10px] text-primary font-bold">{adminUser?.role || 'SUPER_ADMIN'}</div>
-            </div>
+            </Link>
             <button
               onClick={handleLogout}
               title="Sign Out"

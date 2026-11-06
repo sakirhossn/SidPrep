@@ -198,6 +198,28 @@ export interface JobRunRecord {
   lastError?: string;
 }
 
+export interface PageRecord {
+  id: string;
+  slug: string;
+  title: string;
+  subtitle?: string;
+  contentHtml: string;
+  metaTitle?: string;
+  metaDescription?: string;
+  isPublished: boolean;
+  isSystem: boolean;
+  updatedAt: string;
+  createdAt: string;
+}
+
+export interface AppVersionRecord {
+  currentVersion: string;
+  minVersion: string;
+  apkUrl: string;
+  releaseNotes: string;
+  publishedAt: string;
+}
+
 /**
  * Verified PBKDF2 SHA-512 Hash for default admin password 'AdminSecurePass123!'
  * Precomputed to ensure synchronous availability immediately upon startup without async race conditions.
@@ -262,6 +284,14 @@ class SidPrepDatabase {
   public newsSources = new Map<string, { id: string; name: string; feedUrl: string; isEnabled: boolean }>();
   public newsDrafts = new Map<string, NewsDraftRecord>();
   public resources = new Map<string, ResourceRecord>();
+  public pages = new Map<string, PageRecord>();
+  public appVersion: AppVersionRecord = {
+    currentVersion: '2.0.1',
+    minVersion: '2.0.0',
+    apkUrl: 'https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk',
+    releaseNotes: 'SidPrep 2.0.1: Full exam preparation features, Brevo OTP integration, dynamic page CMS, and offline-aware test runner.',
+    publishedAt: new Date().toISOString(),
+  };
   public auditEvents: AuditEventRecord[] = [];
   public operationalEvents: OperationalEventRecord[] = [];
   public appTelemetry: AppTelemetryRecord[] = [];
@@ -656,6 +686,142 @@ class SidPrepDatabase {
       ipAddress: '127.0.0.1',
       createdAt: new Date().toISOString(),
     });
+
+    // 8. Seed Default Website CMS Pages
+    const initialPages: PageRecord[] = [
+      {
+        id: 'page_about',
+        slug: 'about',
+        title: 'About SidPrep 2.0',
+        subtitle: 'Trustworthy, Distraction-Free Preparation for Competitive Exams',
+        contentHtml: `<p>SidPrep was created to provide serious competitive exam candidates (SSC, RRB, WBPSC, IBPS) with a trustworthy, distraction-free preparation platform.</p><h3>Why SidPrep 2.0 was rebuilt from scratch</h3><p>Many online test preparation apps suffer from advertising bloat, questionable question accuracy, fabricated exam dates, and unstable test runners. SidPrep 2.0 was completely rebuilt from a greenfield codebase using modern software principles:</p><ul><li><strong>Zero Fabricated Dates:</strong> We only display exam dates and cutoffs that have been officially published in government gazettes or commission notices.</li><li><strong>Dual-Admin Governance:</strong> Every pattern change must be independently verified by a second administrator.</li><li><strong>Verified Current Affairs:</strong> Sourced strictly from PIB and accredited official releases, summarized concisely with clear citations.</li><li><strong>Respect for Student Privacy:</strong> No invasive tracking SDKs or marketing spam.</li></ul><h3>Infrastructure and Free-Tier Discipline</h3><p>SidPrep 2.0 runs reliably within sustainable free-tier infrastructure (Oracle Cloud Always Free ARM64 compute, Cloudflare security, and Brevo transactional email). We design our architecture conservatively so that learners enjoy high availability without cost-induced shutdowns.</p>`,
+        metaTitle: 'About SidPrep 2.0 — Verified Competitive Exam Platform',
+        metaDescription: 'Learn why SidPrep 2.0 was rebuilt from scratch with zero fabricated dates and dual-admin governance.',
+        isPublished: true,
+        isSystem: true,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'page_contact',
+        slug: 'contact',
+        title: 'Contact SidPrep Support & Editorial Team',
+        subtitle: 'Official support channels and grievance resolution',
+        contentHtml: `<p>We are dedicated to supporting serious candidates across SSC, RRB, WBPSC, and IBPS examinations.</p><h3>Email Support</h3><p>For student account inquiries, bug reports, or content verification questions, reach out directly:</p><p><strong>Support Email:</strong> <a href="mailto:support@sidprep.in">support@sidprep.in</a></p><p><strong>Security & Grievances:</strong> <a href="mailto:security@sidprep.in">security@sidprep.in</a></p><h3>Operating Hours</h3><p>Monday to Saturday: 09:30 IST to 18:30 IST. All official email inquiries are acknowledged within 24 operational hours.</p>`,
+        metaTitle: 'Contact Us — SidPrep 2.0 Support',
+        metaDescription: 'Get in touch with SidPrep support, grievance officer, and exam editorial team.',
+        isPublished: true,
+        isSystem: true,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'page_terms',
+        slug: 'terms',
+        title: 'Terms of Service',
+        subtitle: 'Rules and terms governing SidPrep services',
+        contentHtml: `<p><strong>Last Updated:</strong> November 2026</p><p>By creating an account or accessing SidPrep learning services, you agree to these Terms of Service.</p><h3>1. Fair Use of Learning Materials</h3><p>All test questions, explanations, formulas, and resources provided on SidPrep are for your personal educational use only. You agree not to scrape, distribute, or reverse engineer the API or test runner.</p><h3>2. Examination Rules</h3><p>SidPrep accurately models official government exam patterns, but official government commission rules always remain supreme.</p>`,
+        metaTitle: 'Terms of Service — SidPrep 2.0',
+        metaDescription: 'Read the Terms of Service for SidPrep student portal and mobile application.',
+        isPublished: true,
+        isSystem: true,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'page_privacy',
+        slug: 'privacy',
+        title: 'Privacy Policy',
+        subtitle: 'How SidPrep handles student privacy and data',
+        contentHtml: `<p><strong>Effective Date:</strong> November 2026</p><p>SidPrep 2.0 is built with privacy-first engineering. We collect only what is strictly necessary to power your test prep experience.</p><h3>Information We Collect</h3><ul><li><strong>Student Account:</strong> Email address for one-time password verification and session authentication.</li><li><strong>Practice Activity:</strong> Test answers, timing telemetry, and score metrics to provide accurate progress tracking.</li></ul><h3>Zero Advertising & Zero Third-Party Trackers</h3><p>We do not sell student data, show behavioral advertisements, or embed invasive third-party ad network tracking scripts.</p>`,
+        metaTitle: 'Privacy Policy — SidPrep 2.0',
+        metaDescription: 'Learn how SidPrep protects candidate privacy with zero advertising and encrypted test data.',
+        isPublished: true,
+        isSystem: true,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'page_disclaimer',
+        slug: 'disclaimer',
+        title: 'Disclaimer & Official Status',
+        subtitle: 'Important legal disclaimer regarding government commissions',
+        contentHtml: `<p><strong>Official Entity Notice:</strong> SidPrep is an independent educational platform and is not affiliated, associated, authorized, endorsed by, or in any way officially connected with the Staff Selection Commission (SSC), Railway Recruitment Boards (RRB), West Bengal Public Service Commission (WBPSC), Institute of Banking Personnel Selection (IBPS), or any other government ministry or department.</p><p>Official exam notices, eligibility criteria, and examination schedules are governed exclusively by the respective government authorities at their official websites (e.g., ssc.gov.in, rrbcdg.gov.in, psc.wb.gov.in, ibps.in).</p>`,
+        metaTitle: 'Disclaimer & Legal Status — SidPrep 2.0',
+        metaDescription: 'Official disclaimer clarifying independent educational status from government bodies.',
+        isPublished: true,
+        isSystem: true,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'page_features',
+        slug: 'features',
+        title: 'SidPrep 2.0 Features & Capabilities',
+        subtitle: 'Everything serious government exam candidates need to succeed',
+        contentHtml: `<p>SidPrep 2.0 is an all-in-one preparation ecosystem engineered specifically for SSC, RRB, WBPSC, and IBPS examinations.</p><h3>1. Official Exam Pattern Mocks</h3><p>Full-length and sectional test series matching exact commission schemes, timing, section locks, and marking schemes (+2.0 / -0.5).</p><h3>2. Offline-First Test Runner</h3><p>Take exams even during intermittent internet connectivity. Answers are stored in SQLite and synced automatically when your connection is restored.</p><h3>3. Verified Daily Current Affairs</h3><p>Curated and verified news briefs from PIB and government gazettes with source citations.</p><h3>4. Document & Resource Library</h3><p>Access subject formula sheets, previous year question analyses, and syllabus guides.</p>`,
+        metaTitle: 'Features — SidPrep 2.0 Ecosystem',
+        metaDescription: 'Explore features including offline test runner, verified current affairs, and official exam mocks.',
+        isPublished: true,
+        isSystem: true,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'page_data_deletion',
+        slug: 'data-deletion',
+        title: 'Student Data Deletion Policy',
+        subtitle: 'Request permanent removal of your account and prep records',
+        contentHtml: `<p>In accordance with data protection principles and student privacy rights, you may request complete deletion of your SidPrep account and all associated test attempt records at any time.</p><h3>How to Request Deletion</h3><p>Send an email to <a href="mailto:privacy@sidprep.in">privacy@sidprep.in</a> from the email address registered with your student account with the subject line <strong>Account Deletion Request</strong>.</p><p>Upon verification, all account records, attempt history, and stored preferences will be permanently wiped from active databases within 7 calendar days.</p>`,
+        metaTitle: 'Student Data Deletion Policy — SidPrep 2.0',
+        metaDescription: 'Information on requesting permanent deletion of student account data.',
+        isPublished: true,
+        isSystem: true,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    for (const page of initialPages) {
+      this.pages.set(page.id, page);
+    }
+  }
+
+  // Purge Demo Data Method
+  public purgeDemoData(options: {
+    clearQuestions?: boolean;
+    clearTests?: boolean;
+    clearNews?: boolean;
+    clearResources?: boolean;
+    clearAttempts?: boolean;
+    clearStudents?: boolean;
+  }) {
+    let clearedCount = 0;
+    if (options.clearQuestions) {
+      clearedCount += this.questions.size;
+      this.questions.clear();
+    }
+    if (options.clearTests) {
+      clearedCount += this.tests.size;
+      this.tests.clear();
+    }
+    if (options.clearNews) {
+      clearedCount += this.newsDrafts.size;
+      this.newsDrafts.clear();
+    }
+    if (options.clearResources) {
+      clearedCount += this.resources.size;
+      this.resources.clear();
+    }
+    if (options.clearAttempts) {
+      clearedCount += this.attempts.size;
+      this.attempts.clear();
+    }
+    if (options.clearStudents) {
+      clearedCount += this.students.size;
+      this.students.clear();
+    }
+    return { success: true, clearedCount };
   }
 
   // Audit Logger Method (Immutable append-only)
