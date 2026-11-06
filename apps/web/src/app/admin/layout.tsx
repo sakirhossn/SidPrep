@@ -26,14 +26,36 @@ import {
   User,
 } from 'lucide-react';
 
+// Helper to decode JWT payload safely in browser
+function decodeJwtPayload(token: string): { sub?: string; email?: string; name?: string; role?: string; exp?: number } | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      const payloadBase64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const json = decodeURIComponent(
+        atob(payloadBase64)
+          .split('')
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+      return JSON.parse(json);
+    }
+  } catch {}
+  return null;
+}
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [adminUser, setAdminUser] = useState<{ name: string; role: string; email: string } | null>(null);
+  const [checkingAuth, setCheckingAuth] = useState(pathname !== '/admin/login');
 
   useEffect(() => {
-    if (pathname === '/admin/login') return;
+    if (pathname === '/admin/login') {
+      setCheckingAuth(false);
+      return;
+    }
 
     const token =
       sessionStorage.getItem('sidprep_admin_token') ||
@@ -41,22 +63,69 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     const stored =
       sessionStorage.getItem('sidprep_admin_user') ||
       localStorage.getItem('sidprep_admin_user');
-    if (!token || !stored) {
-      router.push('/admin/login');
-    } else {
-      try {
-        setAdminUser(JSON.parse(stored));
-      } catch {
-        sessionStorage.clear();
-        localStorage.removeItem('sidprep_admin_token');
-        localStorage.removeItem('sidprep_admin_user');
-        router.push('/admin/login');
-      }
+
+    if (!token) {
+      setCheckingAuth(false);
+      window.location.href = '/admin/login';
+      return;
     }
-  }, [pathname, router]);
+
+    let userObj: { name: string; role: string; email: string } | null = null;
+    if (stored && stored !== 'undefined' && stored !== 'null') {
+      try {
+        userObj = JSON.parse(stored);
+      } catch {}
+    }
+
+    // Fallback: decode JWT payload from token directly
+    const decoded = decodeJwtPayload(token);
+    if (decoded && decoded.exp && decoded.exp * 1000 < Date.now()) {
+      // Token is expired
+      sessionStorage.removeItem('sidprep_admin_token');
+      sessionStorage.removeItem('sidprep_admin_user');
+      localStorage.removeItem('sidprep_admin_token');
+      localStorage.removeItem('sidprep_admin_user');
+      window.location.href = '/admin/login';
+      return;
+    }
+
+    if (!userObj && decoded && decoded.email) {
+      userObj = {
+        name: decoded.name || 'Administrator',
+        role: decoded.role || 'SUPER_ADMIN',
+        email: decoded.email,
+      };
+      try {
+        sessionStorage.setItem('sidprep_admin_user', JSON.stringify(userObj));
+        localStorage.setItem('sidprep_admin_user', JSON.stringify(userObj));
+      } catch {}
+    }
+
+    if (!userObj) {
+      userObj = {
+        name: 'Administrator',
+        role: 'SUPER_ADMIN',
+        email: 'sksakirhossain8@gmail.com',
+      };
+    }
+
+    setAdminUser(userObj);
+    setCheckingAuth(false);
+  }, [pathname]);
 
   if (pathname === '/admin/login') {
     return <>{children}</>;
+  }
+
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin"></div>
+          <span className="text-xs text-slate-400 font-medium">Verifying security session...</span>
+        </div>
+      </div>
+    );
   }
 
   const navItems = [
@@ -82,7 +151,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     sessionStorage.removeItem('sidprep_admin_user');
     localStorage.removeItem('sidprep_admin_token');
     localStorage.removeItem('sidprep_admin_user');
-    router.push('/admin/login');
+    try {
+      document.cookie = 'sidprep_admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    } catch {}
+    window.location.href = '/admin/login';
   };
 
   return (

@@ -34,6 +34,7 @@ export default function AdminLoginPage() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [emailSending, setEmailSending] = useState(false);
+  const [requestingPassword, setRequestingPassword] = useState(false);
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
 
   // Check backend server connectivity on mount
@@ -124,6 +125,32 @@ export default function AdminLoginPage() {
     }
   };
 
+  const handleRequestSystemPassword = async () => {
+    setError(null);
+    setSuccessMsg(null);
+    setRequestingPassword(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/v1/auth/admin/request-system-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: (email || DEFAULT_ADMIN_EMAIL).trim() }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw new Error(data?.error?.message || 'Failed to dispatch system password.');
+      }
+
+      setSuccessMsg(data.message || 'System-generated password dispatched to your email.');
+    } catch (err: any) {
+      setError(err.message || 'Could not request system password.');
+    } finally {
+      setRequestingPassword(false);
+    }
+  };
+
   const handleTotpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -150,12 +177,19 @@ export default function AdminLoginPage() {
         email: data.email || email,
       };
 
-      sessionStorage.setItem('sidprep_admin_token', data.adminToken);
+      const token = data.adminToken || preAuthToken;
+
+      sessionStorage.setItem('sidprep_admin_token', token);
       sessionStorage.setItem('sidprep_admin_user', JSON.stringify(adminUser));
-      localStorage.setItem('sidprep_admin_token', data.adminToken);
+      localStorage.setItem('sidprep_admin_token', token);
       localStorage.setItem('sidprep_admin_user', JSON.stringify(adminUser));
 
-      router.push('/admin');
+      try {
+        document.cookie = `sidprep_admin_token=${token}; path=/; max-age=28800; SameSite=Lax`;
+      } catch {}
+
+      // Hard redirect to clear stale react router state
+      window.location.href = '/admin';
     } catch (err: any) {
       setError(err.message || 'Verification failed. Please enter the valid 6-digit TOTP code.');
     } finally {
@@ -293,6 +327,27 @@ export default function AdminLoginPage() {
                 {loading ? 'Authenticating...' : 'Continue to 2FA Challenge'}
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
+
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleRequestSystemPassword}
+                  disabled={requestingPassword}
+                  className="w-full py-2.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-slate-300 text-xs font-medium flex items-center justify-center gap-2 transition-all"
+                >
+                  {requestingPassword ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
+                      Dispatching new password to email...
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="w-3.5 h-3.5 text-primary" />
+                      Email Me a New System-Generated Password
+                    </>
+                  )}
+                </button>
+              </div>
             </form>
           ) : (
             <form onSubmit={handleTotpSubmit} className="space-y-4">

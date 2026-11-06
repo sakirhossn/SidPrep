@@ -6,9 +6,11 @@ import {
   verifyTotp,
   signJwt,
   verifyJwt,
+  generateRandomPassword,
+  hashPassword,
 } from '../../lib/security.js';
 import { env } from '../../config/index.js';
-import { sendStudentOtpEmail, sendAdminOtpEmail } from '../../lib/email.js';
+import { sendStudentOtpEmail, sendAdminOtpEmail, sendAdminCredentialsEmail } from '../../lib/email.js';
 import {
   StudentOtpChallengeSchema,
   StudentOtpVerifySchema,
@@ -220,16 +222,28 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
     // Persisted credentials fallback (checks admin_credentials.json written by dispatch script)
     if (!passwordMatches) {
+      const candidatePaths = [
+        process.env.ADMIN_CREDS_FILE,
+        './admin_credentials.json',
+        '/app/admin_credentials.json',
+        './apps/api/uploads/admin_credentials.json',
+        '/app/apps/api/uploads/admin_credentials.json',
+        './uploads/admin_credentials.json',
+      ].filter(Boolean) as string[];
+
       try {
         const fs = await import('node:fs');
-        const credPath = process.env.ADMIN_CREDS_FILE || './admin_credentials.json';
-        if (fs.existsSync(credPath)) {
-          const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
-          if (creds.email?.toLowerCase() === email.toLowerCase()) {
-            if (creds.password && creds.password === password) {
-              passwordMatches = true;
-            } else if (creds.passwordHash && (await verifyPassword(password, creds.passwordHash))) {
-              passwordMatches = true;
+        for (const credPath of candidatePaths) {
+          if (fs.existsSync(credPath)) {
+            const creds = JSON.parse(fs.readFileSync(credPath, 'utf8'));
+            if (creds.email?.toLowerCase() === email.toLowerCase()) {
+              if (creds.password && creds.password === password) {
+                passwordMatches = true;
+                break;
+              } else if (creds.passwordHash && (await verifyPassword(password, creds.passwordHash))) {
+                passwordMatches = true;
+                break;
+              }
             }
           }
         }
@@ -327,6 +341,108 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       success: true,
       message: `A 6-digit verification code has been dispatched to ${admin.email} via Brevo SMTP relay.`,
       devOtpHint: env.NODE_ENV === 'development' ? otp : undefined,
+    });
+  });
+
+  /**
+   * POST /auth/admin/request-system-password
+   * Generate a secure system password and dispatch it directly to the administrator's email.
+   * Does NOT reveal the plaintext password over the public HTTP wire.
+   */
+  fastify.post('/auth/admin/request-system-password', async (request, reply) => {
+    const { email } = (request.body as any) || {};
+    const targetEmail = (email || process.env.ADMIN_EMAIL || 'sksakirhossain8@gmail.com').trim().toLowerCase();
+
+    // Verify target matches registered admin
+    const admin = Array.from(db.adminUsers.values()).find(
+      (a) => a.email.toLowerCase() === targetEmail
+    );
+
+    if (!admin && targetEmail !== (process.env.ADMIN_EMAIL || 'sksakirhossain8@gmail.com').toLowerCase()) {
+      return reply.code(404).send({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'No administrative account found for this email address.' },
+      });
+    }
+
+    // 1. Generate secure random password
+    const newPassword = generateRandomPassword(14);
+    const newPasswordHash = await hashPassword(newPassword);
+
+    // 2. Update DB record in memory
+    if (admin) {
+      admin.passwordHash = newPasswordHash;
+    } else {
+      db.adminUsers.set('adm_owner', {
+        id: 'adm_owner',
+        email: targetEmail,
+        name: 'Sk Sakir Hossain',
+        passwordHash: newPasswordHash,
+        role: 'SUPER_ADMIN',
+        totpSecret: 'JBSWY3DPEHPK3PXP',
+        is2faEnabled: true,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // 3. Persist credentials to disk on server
+    const credPaths = [
+      process.env.ADMIN_CREDS_FILE,
+      './admin_credentials.json',
+      '/app/admin_credentials.json',
+      './apps/api/uploads/admin_credentials.json',
+      '/app/apps/api/uploads/admin_credentials.json',
+      './uploads/admin_credentials.json',
+    ].filter(Boolean) as string[];
+
+    const fs = await import('node:fs');
+    for (const p of credPaths) {
+      try {
+        const dir = (await import('node:path')).dirname(p);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(
+          p,
+          JSON.stringify(
+            {
+              email: targetEmail,
+              password: newPassword,
+              passwordHash: newPasswordHash,
+              updatedAt: new Date().toISOString(),
+            },
+            null,
+            2
+          ),
+          'utf8'
+        );
+      } catch {}
+    }
+
+    // 4. Dispatch credentials via Brevo SMTP relay
+    db.brevoSendsToday++;
+    let emailSent = false;
+    let emailError = '';
+    try {
+      const emailResult = await sendAdminCredentialsEmail(targetEmail, newPassword);
+      emailSent = emailResult.success;
+      if (!emailResult.success) emailError = emailResult.error || 'SMTP delivery rejected';
+    } catch (err: any) {
+      emailError = err.message;
+    }
+
+    db.logOperational({
+      service: 'ADMIN_AUTH',
+      level: 'INFO',
+      message: `System-generated password created for ${targetEmail}. Email dispatched: ${emailSent}`,
+      meta: { emailSent, emailError: emailError || undefined },
+    });
+
+    return reply.send({
+      success: true,
+      message: emailSent
+        ? `A new system-generated password has been securely dispatched to your inbox (${targetEmail}).`
+        : `A new system-generated password was generated and saved to the server. ${emailError ? `Brevo note: ${emailError}` : ''}`,
+      emailDispatched: emailSent,
     });
   });
 

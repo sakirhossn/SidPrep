@@ -21,6 +21,7 @@ cd "$PROJECT_DIR"
 echo "[1/4] Pulling latest code from origin/main..."
 git fetch origin main
 git pull origin main
+chmod +x scripts/*.sh 2>/dev/null || true
 
 # 2. Setup/verify .env file with production credentials
 if [ ! -f .env ]; then

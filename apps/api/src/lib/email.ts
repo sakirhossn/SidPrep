@@ -213,7 +213,7 @@ export async function sendAdminCredentialsEmail(
         <p style="margin: 6px 0; font-size: 13px;"><strong style="color: #94a3b8;">Initial 2FA Seed Code:</strong> <code style="color: #facc15; font-size: 14px; font-weight: 600;">123456</code></p>
       </div>
 
-      <p style="font-size: 13px; color: #cbd5e1;">Access the console here: <a href="http://localhost:3000/admin/login" style="color: #6366f1; font-weight: 600; text-decoration: underline;">http://localhost:3000/admin/login</a></p>
+      <p style="font-size: 13px; color: #cbd5e1;">Access the console here: <a href="https://sidprep.in/admin/login" style="color: #6366f1; font-weight: 600; text-decoration: underline;">https://sidprep.in/admin/login</a></p>
       <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;" />
       <p style="font-size: 11px; color: #64748b; margin: 0;">This is an automated system dispatch from SidPrep 2.0. All administrative sessions are recorded in the immutable audit ledger.</p>
     </div>

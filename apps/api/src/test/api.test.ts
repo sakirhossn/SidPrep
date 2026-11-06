@@ -236,6 +236,17 @@ describe('SidPrep 2.0 Shared API Test Suite', async () => {
     assert.equal(verifyTotpBody.success, true);
     assert.ok(verifyTotpBody.adminToken);
     assert.equal(verifyTotpBody.email, 'sksakirhossain8@gmail.com');
+
+    // Step 4: System generated password dispatch endpoint
+    const sysPassRes = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/admin/request-system-password',
+      payload: { email: 'sksakirhossain8@gmail.com' },
+    });
+    assert.equal(sysPassRes.statusCode, 200);
+    const sysPassBody = JSON.parse(sysPassRes.body);
+    assert.equal(sysPassBody.success, true);
+    assert.ok(sysPassBody.message);
   });
 
   it('9. Website Page CMS: Create, Fetch, and Update dynamic page', async () => {
