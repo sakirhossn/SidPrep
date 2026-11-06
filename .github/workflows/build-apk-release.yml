@@ -24,7 +24,7 @@ jobs:
   build-apk:
     name: Build Android Standalone APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     steps:
       - name: Checkout Repository
@@ -47,11 +47,21 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Setup Gradle Build Cache
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: false
+
       - name: Configure Android SDK Environment
         run: |
           echo "ANDROID_HOME=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> $GITHUB_ENV
           yes | ${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Optimize Global Gradle Configuration
+        run: |
+          mkdir -p ~/.gradle
+          printf "org.gradle.daemon=true\norg.gradle.parallel=true\norg.gradle.caching=true\norg.gradle.jvmargs=-Xmx4096m -XX:+UseParallelGC -Dfile.encoding=UTF-8\nandroid.useAndroidX=true\n" > ~/.gradle/gradle.properties
 
       - name: Install Monorepo Dependencies
         run: pnpm install --frozen-lockfile || pnpm install
@@ -67,13 +77,28 @@ jobs:
         env:
           EXPO_PUBLIC_API_URL: https://api.sidprep.in/v1
 
+      - name: Configure Target Architecture (Physical ARM Devices)
+        working-directory: apps/mobile/android
+        run: |
+          # Target physical ARM devices (arm64-v8a and armeabi-v7a) — skips redundant x86/x86_64 C++ compilation
+          printf "reactNativeArchitectures=arm64-v8a,armeabi-v7a\norg.gradle.parallel=true\norg.gradle.caching=true\n" >> gradle.properties
+
       - name: Build Android Release APK with Gradle
         working-directory: apps/mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon -x lint -x test
+          ./gradlew assembleRelease \
+            --parallel \
+            --build-cache \
+            --max-workers=2 \
+            -PreactNativeArchitectures=arm64-v8a,armeabi-v7a \
+            -x lint \
+            -x lintVitalRelease \
+            -x lintVitalAnalyzeRelease \
+            -x test
         env:
-          JAVA_OPTS: "-Xmx3072m"
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4096m -XX:+UseParallelGC'"
+          JAVA_OPTS: "-Xmx4096m"
 
       - name: Locate, Sign and Rename APK
         run: |
