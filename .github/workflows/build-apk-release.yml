@@ -120,22 +120,24 @@ jobs:
           SHA256_HASH=$(sha256sum "$APK_PATH" | awk '{print $1}')
           FILE_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH" 2>/dev/null || wc -c < "$APK_PATH")
 
-          cat <<EOF > release-artifacts/update.json
-{
-  "version": "${PKG_VERSION}",
-  "currentVersion": "${PKG_VERSION}",
-  "tag": "${TAG_NAME}",
-  "minVersion": "2.0.0",
-  "apkUrl": "https://github.com/sakirhossn/SidPrep/releases/download/${TAG_NAME}/SidPrep-Student-${TAG_NAME}.apk",
-  "latestApkUrl": "https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk",
-  "releaseUrl": "https://github.com/sakirhossn/SidPrep/releases/tag/${TAG_NAME}",
-  "releaseNotes": "SidPrep ${TAG_NAME}: Student Android Companion release with full syllabus structures, offline-aware test runner, Brevo OTP authentication, and dynamic page CMS.",
-  "publishedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-  "sha256": "${SHA256_HASH}",
-  "sizeBytes": ${FILE_SIZE}
-}
-EOF
-          cp release-artifacts/update.json release-artifacts/version.json
+          PKG_VERSION="$PKG_VERSION" TAG_NAME="$TAG_NAME" SHA256_HASH="$SHA256_HASH" FILE_SIZE="$FILE_SIZE" node -e '
+            const fs = require("fs");
+            const updateData = {
+              version: process.env.PKG_VERSION,
+              currentVersion: process.env.PKG_VERSION,
+              tag: process.env.TAG_NAME,
+              minVersion: "2.0.0",
+              apkUrl: `https://github.com/sakirhossn/SidPrep/releases/download/${process.env.TAG_NAME}/SidPrep-Student-${process.env.TAG_NAME}.apk`,
+              latestApkUrl: "https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk",
+              releaseUrl: `https://github.com/sakirhossn/SidPrep/releases/tag/${process.env.TAG_NAME}`,
+              releaseNotes: `SidPrep ${process.env.TAG_NAME}: Student Android Companion release with full syllabus structures, offline-aware test runner, Brevo OTP authentication, and dynamic page CMS.`,
+              publishedAt: new Date().toISOString(),
+              sha256: process.env.SHA256_HASH,
+              sizeBytes: Number(process.env.FILE_SIZE) || 0
+            };
+            fs.writeFileSync("release-artifacts/update.json", JSON.stringify(updateData, null, 2));
+            fs.writeFileSync("release-artifacts/version.json", JSON.stringify(updateData, null, 2));
+          '
 
           echo "OUTPUT_APK=release-artifacts/SidPrep-Student-${TAG_NAME}.apk" >> $GITHUB_ENV
           echo "LATEST_APK=release-artifacts/SidPrep-Student-release.apk" >> $GITHUB_ENV
