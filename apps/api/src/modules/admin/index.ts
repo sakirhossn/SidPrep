@@ -636,8 +636,31 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       currentVersion: db.appVersion.currentVersion,
       minVersion: db.appVersion.minVersion,
       apkUrl: db.appVersion.apkUrl,
+      latestApkUrl: db.appVersion.apkUrl,
       releaseNotes: db.appVersion.releaseNotes,
       publishedAt: db.appVersion.publishedAt,
     });
   });
+
+  /**
+   * Public Endpoint: GET /app/update.json and GET /app/version.json
+   * Direct update file descriptor matching GitHub Releases format
+   */
+  const handleUpdateJson = async (_request: any, reply: any) => {
+    return reply.header('Content-Type', 'application/json').send({
+      version: db.appVersion.currentVersion,
+      currentVersion: db.appVersion.currentVersion,
+      tag: `v${db.appVersion.currentVersion}`,
+      minVersion: db.appVersion.minVersion,
+      apkUrl: `https://github.com/sakirhossn/SidPrep/releases/download/v${db.appVersion.currentVersion}/SidPrep-Student-v${db.appVersion.currentVersion}.apk`,
+      latestApkUrl: db.appVersion.apkUrl,
+      releaseUrl: `https://github.com/sakirhossn/SidPrep/releases/tag/v${db.appVersion.currentVersion}`,
+      releaseNotes: db.appVersion.releaseNotes,
+      publishedAt: db.appVersion.publishedAt,
+      fileName: 'SidPrep-Student-release.apk',
+    });
+  };
+
+  fastify.get('/app/update.json', handleUpdateJson);
+  fastify.get('/app/version.json', handleUpdateJson);
 };

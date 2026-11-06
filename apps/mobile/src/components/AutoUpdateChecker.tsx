@@ -62,11 +62,13 @@ export function AutoUpdateChecker() {
   const isMandatory = compareVersions(updateInfo.minVersion, localVersion) > 0;
 
   const handleDownloadUpdate = async () => {
-    if (updateInfo.apkUrl) {
+    const targetUrl = updateInfo.apkUrl || 'https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk';
+    try {
+      await Linking.openURL(targetUrl);
+    } catch {
       try {
-        await Linking.openURL(updateInfo.apkUrl);
+        await Linking.openURL('https://github.com/sakirhossn/SidPrep/releases/latest');
       } catch {
-        // Fallback to website download page
         Linking.openURL('https://sidprep.in/app');
       }
     }

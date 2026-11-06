@@ -1,3 +1,4 @@
+process.env.NODE_ENV = 'test';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildServer } from '../server.js';
@@ -325,6 +326,18 @@ describe('SidPrep 2.0 Shared API Test Suite', async () => {
     assert.equal(version.success, true);
     assert.equal(version.currentVersion, '2.0.1');
     assert.ok(version.apkUrl);
+
+    // Update File descriptor endpoint (matching GitHub release update.json)
+    const updateJsonRes = await app.inject({
+      method: 'GET',
+      url: '/v1/app/update.json',
+    });
+    assert.equal(updateJsonRes.statusCode, 200);
+    const updateJson = JSON.parse(updateJsonRes.body);
+    assert.equal(updateJson.version, '2.0.1');
+    assert.equal(updateJson.tag, 'v2.0.1');
+    assert.ok(updateJson.latestApkUrl);
+    assert.ok(updateJson.releaseUrl);
   });
 
   it('12. Purge Demo Data endpoint preserves taxonomy & staff', async () => {

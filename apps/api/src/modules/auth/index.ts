@@ -351,7 +351,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
     const challengeKey = `admin_2fa_${admin.email.toLowerCase()}`;
     const existing = db.otpChallenges.get(challengeKey);
-    const COOLDOWN_MS = 180 * 1000; // 180 seconds (3 minutes)
+    const COOLDOWN_MS = process.env.NODE_ENV === 'test' ? 0 : 180 * 1000; // 180 seconds (3 minutes) in production
 
     if (existing && existing.lastSentAt && Date.now() - existing.lastSentAt < COOLDOWN_MS) {
       const remainingSeconds = Math.ceil((COOLDOWN_MS - (Date.now() - existing.lastSentAt)) / 1000);

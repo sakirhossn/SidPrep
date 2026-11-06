@@ -393,13 +393,42 @@ export class SidPrepApiClient {
     releaseNotes: string;
     publishedAt: string;
   }> {
-    return this.request<{
-      currentVersion: string;
-      minVersion: string;
-      apkUrl: string;
-      releaseNotes: string;
-      publishedAt: string;
-    }>('/app/version');
+    // 1. First attempt to check the primary backend server
+    try {
+      const res = await this.request<any>('/app/version');
+      if (res && (res.currentVersion || res.version)) {
+        return {
+          currentVersion: res.currentVersion || res.version,
+          minVersion: res.minVersion || '2.0.0',
+          apkUrl: res.apkUrl || res.latestApkUrl || 'https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk',
+          releaseNotes: res.releaseNotes || 'Bug fixes, performance improvements, and enhanced exam test runner.',
+          publishedAt: res.publishedAt || new Date().toISOString()
+        };
+      }
+    } catch {
+      // Fall through to GitHub Releases update file check
+    }
+
+    // 2. Resilient fallback: Query official GitHub Releases update file directly
+    try {
+      const ghRes = await fetch('https://raw.githubusercontent.com/sakirhossn/SidPrep/main/apps/mobile/update.json', {
+        headers: { Accept: 'application/json' }
+      });
+      if (ghRes.ok) {
+        const data = await ghRes.json();
+        return {
+          currentVersion: data.currentVersion || data.version,
+          minVersion: data.minVersion || '2.0.0',
+          apkUrl: data.latestApkUrl || data.apkUrl || 'https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk',
+          releaseNotes: data.releaseNotes || 'New official release available on GitHub.',
+          publishedAt: data.publishedAt || new Date().toISOString()
+        };
+      }
+    } catch {
+      // Fall through
+    }
+
+    throw new Error('Unable to check for updates from server or GitHub releases');
   }
 }
 

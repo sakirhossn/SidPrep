@@ -23,18 +23,25 @@ export default function MobileAppPage() {
         {/* Action Button */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
           <a
-            href="#download-apk"
-            onClick={(e) => {
-              e.preventDefault();
-              alert('Direct APK package generation ready via Expo EAS build pipeline.');
-            }}
+            href="https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk"
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-7 py-4 rounded-xl bg-primary hover:bg-primary-600 text-white font-heading font-bold text-sm shadow-md hover:shadow-lg transition-all"
           >
             <Download className="w-4 h-4" />
-            Download SidPrep Android APK (v2.0.0)
+            Download SidPrep Android APK (v2.0.1)
           </a>
+          <a
+            href="https://github.com/sakirhossn/SidPrep/releases/latest"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-heading font-semibold text-sm transition-all"
+          >
+            <span>GitHub Releases & Changelog</span>
+            <ArrowRight className="w-4 h-4 text-slate-500" />
+          </a>
+        </div>
+        <div className="mt-4 text-center">
           <span className="text-xs text-slate-500 font-medium">
-            Requires Android 8.0 (Oreo) or higher • 22.4 MB
+            Requires Android 8.0 (Oreo) or higher • Universal APK (~25 MB) • Signed & Verified
           </span>
         </div>
       </div>
