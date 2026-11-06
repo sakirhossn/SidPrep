@@ -81,7 +81,8 @@ jobs:
         working-directory: apps/mobile/android
         run: |
           # Target physical ARM devices (arm64-v8a and armeabi-v7a) — skips redundant x86/x86_64 C++ compilation
-          printf "reactNativeArchitectures=arm64-v8a,armeabi-v7a\norg.gradle.parallel=true\norg.gradle.caching=true\n" >> gradle.properties
+          # Prefix with \n to ensure clean line separation after expo prebuild gradle.properties
+          printf "\nreactNativeArchitectures=arm64-v8a,armeabi-v7a\norg.gradle.parallel=true\norg.gradle.caching=true\n" >> gradle.properties
 
       - name: Build Android Release APK with Gradle
         working-directory: apps/mobile/android
