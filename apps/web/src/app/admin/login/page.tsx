@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Shield,
-  KeyRound,
   ArrowRight,
   ArrowLeft,
   AlertCircle,
@@ -14,13 +13,13 @@ import {
   Mail,
   RefreshCw,
   Server,
+  Clock,
 } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 const DEFAULT_ADMIN_EMAIL = 'sksakirhossain8@gmail.com';
 const DEFAULT_ADMIN_PASSWORD = 'AdminSecurePass123!';
-const DEFAULT_DEV_TOTP = '123456';
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -30,6 +29,8 @@ export default function AdminLoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [totpCode, setTotpCode] = useState('');
   const [preAuthToken, setPreAuthToken] = useState('');
+  const [targetEmail, setTargetEmail] = useState('');
+  const [countdown, setCountdown] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -50,14 +51,18 @@ export default function AdminLoginPage() {
     checkServer();
   }, []);
 
+  // 180-second live cooldown timer for resending OTP
+  useEffect(() => {
+    if (step !== 'TOTP' || countdown <= 0) return;
+    const timer = setInterval(() => {
+      setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [step, countdown]);
+
   const fillDefaultCredentials = () => {
     setEmail(DEFAULT_ADMIN_EMAIL);
     setPassword(DEFAULT_ADMIN_PASSWORD);
-    setError(null);
-  };
-
-  const fillDefaultTotp = () => {
-    setTotpCode(DEFAULT_DEV_TOTP);
     setError(null);
   };
 
@@ -81,6 +86,16 @@ export default function AdminLoginPage() {
       }
 
       setPreAuthToken(data.preAuthToken);
+      const recipient = data.targetEmail || email.trim();
+      setTargetEmail(recipient);
+      setCountdown(data.resendCooldownSeconds || 180);
+
+      if (data.emailSent) {
+        setSuccessMsg(`A 6-digit live verification code has been dispatched to ${recipient} via SidPrep <no-reply@sidprep.in>.`);
+      } else {
+        setSuccessMsg(`Live 2FA session initialized for ${recipient}. Please check your inbox.`);
+      }
+
       setStep('TOTP');
     } catch (err: any) {
       const isNetworkError =
@@ -100,6 +115,7 @@ export default function AdminLoginPage() {
   };
 
   const handleSendEmailOtp = async () => {
+    if (countdown > 0) return;
     setError(null);
     setSuccessMsg(null);
     setEmailSending(true);
@@ -114,12 +130,13 @@ export default function AdminLoginPage() {
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {
-        throw new Error(data?.error?.message || 'Failed to dispatch email OTP.');
+        throw new Error(data?.error?.message || 'Failed to dispatch email verification code.');
       }
 
-      setSuccessMsg(data.message || 'Verification code dispatched to your email via Brevo SMTP.');
+      setSuccessMsg(data.message || `A new 6-digit verification code has been dispatched to ${targetEmail || email}.`);
+      setCountdown(data.resendCooldownSeconds || 180);
     } catch (err: any) {
-      setError(err.message || 'Could not send 2FA email. Please use your authenticator app code.');
+      setError(err.message || 'Could not send verification email. Please try again.');
     } finally {
       setEmailSending(false);
     }
@@ -167,7 +184,7 @@ export default function AdminLoginPage() {
       const data = await res.json().catch(() => null);
 
       if (!res.ok) {
-        throw new Error(data?.error?.message || 'Invalid two-factor authentication TOTP code.');
+        throw new Error(data?.error?.message || 'Invalid 6-digit verification code. Please check your email.');
       }
 
       const adminUser = data.admin || {
@@ -188,13 +205,19 @@ export default function AdminLoginPage() {
         document.cookie = `sidprep_admin_token=${token}; path=/; max-age=28800; SameSite=Lax`;
       } catch {}
 
-      // Hard redirect to clear stale react router state
+      // Hard navigation to eliminate React hydration/layout state mismatches
       window.location.href = '/admin';
     } catch (err: any) {
-      setError(err.message || 'Verification failed. Please enter the valid 6-digit TOTP code.');
+      setError(err.message || 'Verification failed. Please enter the valid 6-digit code sent to your email.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const formatCountdown = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -209,7 +232,7 @@ export default function AdminLoginPage() {
             SidPrep 2.0 Security Console
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Protected Staff CMS • Role-Based Access & Mandatory 2FA
+            Protected Staff CMS • Role-Based Access & Live Email 2FA
           </p>
 
           {/* Connection status indicator */}
@@ -264,7 +287,7 @@ export default function AdminLoginPage() {
             <form onSubmit={handlePasswordSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Staff Email
+                  Administrative Email Address
                 </label>
                 <input
                   type="email"
@@ -278,13 +301,13 @@ export default function AdminLoginPage() {
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-semibold text-slate-300">
-                    Password
+                  <label className="text-xs font-semibold text-slate-300">
+                    Master Password
                   </label>
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="text-[11px] text-slate-400 hover:text-slate-200 flex items-center gap-1"
+                    className="text-[11px] text-slate-400 hover:text-white flex items-center gap-1"
                   >
                     {showPassword ? (
                       <>
@@ -324,7 +347,7 @@ export default function AdminLoginPage() {
                 disabled={loading}
                 className="w-full py-3 rounded-xl bg-primary hover:bg-primary-600 text-white font-heading font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
               >
-                {loading ? 'Authenticating...' : 'Continue to 2FA Challenge'}
+                {loading ? 'Authenticating & Sending Code...' : 'Authenticate & Send 2FA Code'}
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
 
@@ -352,12 +375,16 @@ export default function AdminLoginPage() {
           ) : (
             <form onSubmit={handleTotpSubmit} className="space-y-4">
               <div className="text-center py-2">
-                <KeyRound className="w-8 h-8 text-primary mx-auto mb-2" />
+                <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mx-auto mb-2.5">
+                  <Mail className="w-6 h-6" />
+                </div>
                 <h3 className="font-heading font-bold text-sm text-white">
-                  Enter 6-Digit 2FA Code
+                  Enter 6-Digit Verification Code
                 </h3>
-                <p className="text-[11px] text-slate-400">
-                  Use Google Authenticator or request a code directly to your email.
+                <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
+                  A real-time security code was dispatched to{' '}
+                  <strong className="text-white">{targetEmail || email || DEFAULT_ADMIN_EMAIL}</strong>{' '}
+                  from <span className="text-indigo-400 font-medium">SidPrep &lt;no-reply@sidprep.in&gt;</span>.
                 </p>
               </div>
 
@@ -368,52 +395,47 @@ export default function AdminLoginPage() {
                   maxLength={6}
                   placeholder="000000"
                   value={totpCode}
-                  onChange={(e) => setTotpCode(e.target.value)}
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
                   className="w-full text-center tracking-[0.5em] text-2xl font-mono py-3 rounded-xl bg-slate-800 border border-slate-700 text-white focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+                  autoFocus
                 />
               </div>
 
-              {/* Brevo Email OTP Option */}
+              {/* 180s Resend Timer & Button */}
               <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={handleSendEmailOtp}
-                  disabled={emailSending}
-                  className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-200 text-xs font-medium flex items-center justify-center gap-2 transition-all"
-                >
-                  {emailSending ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
-                      Dispatching email via Brevo...
-                    </>
-                  ) : (
-                    <>
-                      <Mail className="w-3.5 h-3.5 text-primary" />
-                      Send 2FA Code to My Email (Brevo)
-                    </>
-                  )}
-                </button>
-              </div>
-
-              <div className="p-3 rounded-lg bg-slate-800/60 border border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
-                <span>
-                  Default Seed Code: <strong className="text-white">123456</strong>
-                </span>
-                <button
-                  type="button"
-                  onClick={fillDefaultTotp}
-                  className="text-primary hover:underline font-semibold"
-                >
-                  Auto-fill Code
-                </button>
+                {countdown > 0 ? (
+                  <div className="w-full py-2.5 px-3 rounded-xl bg-slate-800/40 border border-slate-800 text-slate-400 text-xs flex items-center justify-center gap-2">
+                    <Clock className="w-3.5 h-3.5 text-primary animate-pulse" />
+                    <span>Resend code in <strong className="text-white font-mono">{formatCountdown(countdown)}</strong></span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSendEmailOtp}
+                    disabled={emailSending}
+                    className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-200 text-xs font-medium flex items-center justify-center gap-2 transition-all"
+                  >
+                    {emailSending ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
+                        Dispatching fresh code...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 text-primary" />
+                        Resend 6-Digit Code to Email
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
 
               <button
                 type="submit"
-                disabled={loading}
-                className="w-full py-3 rounded-xl bg-primary hover:bg-primary-600 text-white font-heading font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
+                disabled={loading || totpCode.trim().length !== 6}
+                className="w-full py-3 rounded-xl bg-primary hover:bg-primary-600 disabled:opacity-50 text-white font-heading font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
               >
-                {loading ? 'Verifying...' : 'Verify & Access Console'}
+                {loading ? 'Verifying Code...' : 'Verify Code & Access Dashboard'}
                 <CheckCircle2 className="w-3.5 h-3.5" />
               </button>
 

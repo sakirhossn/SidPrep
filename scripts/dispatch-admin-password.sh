@@ -16,18 +16,23 @@ fi
 
 cd "$PROJECT_DIR"
 
-echo "Generating and dispatching new secure admin password..."
-if docker compose ps | grep -q "sidprep_api.*running"; then
-  echo "Executing inside running sidprep_api container..."
-  docker compose exec -T api node dist/scripts/dispatch-admin-pass.js
+echo "Executing password generator inside Docker API environment..."
+
+if docker compose exec -T api node apps/api/dist/scripts/dispatch-admin-pass.js 2>/dev/null; then
+  echo "Dispatched via docker compose api."
+elif docker compose exec -T api node dist/scripts/dispatch-admin-pass.js 2>/dev/null; then
+  echo "Dispatched via docker compose api."
+elif docker exec -i sidprep_api node apps/api/dist/scripts/dispatch-admin-pass.js 2>/dev/null; then
+  echo "Dispatched via container sidprep_api."
 else
-  echo "Executing with local node environment..."
-  node apps/api/dist/scripts/dispatch-admin-pass.js || npx tsx apps/api/src/scripts/dispatch-admin-pass.ts
+  echo "Container not running. Executing with Docker Compose run..."
+  docker compose run --rm api node dist/scripts/dispatch-admin-pass.js
 fi
 
 echo ""
 echo "========================================="
 echo " Dispatch Complete!"
 echo " Check your email: sksakirhossain8@gmail.com"
-echo " (Sensitive credentials are saved only on this server in admin_credentials.json)"
+echo " (From: SidPrep <no-reply@sidprep.in>)"
+echo " Sensitive credentials saved on server: /opt/sidprep/admin_credentials.json"
 echo "========================================="

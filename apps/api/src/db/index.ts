@@ -276,7 +276,7 @@ class SidPrepDatabase {
       },
     ],
   ]);
-  public otpChallenges = new Map<string, { otp: string; expiresAt: number; attempts: number }>();
+  public otpChallenges = new Map<string, { otp: string; expiresAt: number; attempts: number; lastSentAt?: number }>();
   public exams = new Map<string, ExamRecord>();
   public questions = new Map<string, QuestionRecord>();
   public tests = new Map<string, TestRecord>();

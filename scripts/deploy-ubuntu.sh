@@ -29,7 +29,15 @@ if [ ! -f .env ]; then
   cp .env.example .env
 fi
 
-# Ensure storage driver and R2 settings are active in .env
+# Ensure Brevo sender is verified SidPrep <no-reply@sidprep.in>
+if [ -f .env ]; then
+  if grep -q "BREVO_SENDER_EMAIL=c0cb63001@smtp-brevo.com" .env; then
+    sed -i 's/BREVO_SENDER_EMAIL=.*/BREVO_SENDER_EMAIL=no-reply@sidprep.in/' .env
+  fi
+  if grep -q "BREVO_SENDER_NAME=SidPrep Notifications" .env; then
+    sed -i 's/BREVO_SENDER_NAME=.*/BREVO_SENDER_NAME=SidPrep/' .env
+  fi
+fi
 if ! grep -q "R2_ENDPOINT" .env; then
   echo "Appending Cloudflare R2 credentials to .env..."
   cat << 'EOF' >> .env

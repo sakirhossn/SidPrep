@@ -51,7 +51,9 @@ export async function sendEmail(
 
   try {
     const transporter = createTransporter();
-    const sender = `"${env.BREVO_SENDER_NAME}" <${env.BREVO_SENDER_EMAIL}>`;
+    const senderName = env.BREVO_SENDER_NAME && env.BREVO_SENDER_NAME !== 'SidPrep Notifications' ? env.BREVO_SENDER_NAME : 'SidPrep';
+    const senderEmail = env.BREVO_SENDER_EMAIL && env.BREVO_SENDER_EMAIL !== 'c0cb63001@smtp-brevo.com' ? env.BREVO_SENDER_EMAIL : 'no-reply@sidprep.in';
+    const sender = `"${senderName}" <${senderEmail}>`;
 
     const info = await transporter.sendMail({
       from: sender,

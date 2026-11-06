@@ -269,20 +269,55 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    // Generate short-lived pre-auth token for 2FA TOTP step (valid for 5 minutes)
-    const preAuthToken = signJwt({ sub: admin.id, email: admin.email, step: 'totp_pending' }, '5m');
+    // Generate short-lived pre-auth token for 2FA TOTP step (valid for 10 minutes)
+    const preAuthToken = signJwt({ sub: admin.id, email: admin.email, step: 'totp_pending' }, '10m');
+
+    // Automatically generate and dispatch real-time 6-digit email OTP for live 2FA
+    const otp = generateOtp();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 mins
+    const challengeKey = `admin_2fa_${admin.email.toLowerCase()}`;
+    db.otpChallenges.set(challengeKey, {
+      otp,
+      expiresAt,
+      lastSentAt: Date.now(),
+      attempts: 0,
+    });
+
+    db.brevoSendsToday++;
+
+    let emailSent = false;
+    let emailError = '';
+    try {
+      const emailResult = await sendAdminOtpEmail(admin.email, otp);
+      emailSent = emailResult.success;
+      if (!emailResult.success) emailError = emailResult.error || 'SMTP rejected';
+    } catch (err: any) {
+      emailError = err.message;
+      console.error(`[Auth] Failed to dispatch admin 2FA email:`, err.message);
+    }
+
+    db.logOperational({
+      service: 'ADMIN_AUTH',
+      level: 'INFO',
+      message: `Live 2FA code generated and emailed to ${admin.email}. Sent: ${emailSent}`,
+      meta: { adminId: admin.id, emailSent, emailError: emailError || undefined },
+    });
 
     return reply.send({
       success: true,
       requiresTotp: true,
       preAuthToken,
-      devTotpSecret: env.NODE_ENV === 'development' ? admin.totpSecret : undefined,
+      targetEmail: admin.email,
+      resendCooldownSeconds: 180,
+      emailSent,
+      emailError: emailError || undefined,
+      devOtpHint: env.NODE_ENV === 'development' ? otp : undefined,
     });
   });
 
   /**
    * POST /auth/admin/send-email-otp
-   * Request email 2FA OTP code via Brevo SMTP
+   * Request email 2FA OTP code via Brevo SMTP with 180-second (3-minute) rate limiting
    */
   fastify.post('/auth/admin/send-email-otp', async (request, reply) => {
     const { preAuthToken, email, password } = (request.body as any) || {};
@@ -314,32 +349,58 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
+    const challengeKey = `admin_2fa_${admin.email.toLowerCase()}`;
+    const existing = db.otpChallenges.get(challengeKey);
+    const COOLDOWN_MS = 180 * 1000; // 180 seconds (3 minutes)
+
+    if (existing && existing.lastSentAt && Date.now() - existing.lastSentAt < COOLDOWN_MS) {
+      const remainingSeconds = Math.ceil((COOLDOWN_MS - (Date.now() - existing.lastSentAt)) / 1000);
+      return reply.code(429).send({
+        success: false,
+        error: {
+          code: 'RATE_LIMITED',
+          message: `Please wait ${remainingSeconds} seconds before requesting another code.`,
+          remainingSeconds,
+        },
+      });
+    }
+
     const otp = generateOtp();
-    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
-    db.otpChallenges.set(`admin_2fa_${admin.email.toLowerCase()}`, {
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 mins
+    db.otpChallenges.set(challengeKey, {
       otp,
       expiresAt,
+      lastSentAt: Date.now(),
       attempts: 0,
     });
 
     db.brevoSendsToday++;
 
+    let emailSent = false;
+    let emailError = '';
     try {
-      await sendAdminOtpEmail(admin.email, otp);
+      const emailResult = await sendAdminOtpEmail(admin.email, otp);
+      emailSent = emailResult.success;
+      if (!emailResult.success) emailError = emailResult.error || 'SMTP rejected';
     } catch (err: any) {
+      emailError = err.message;
       console.error(`[Auth] Failed to dispatch admin 2FA email:`, err.message);
     }
 
     db.logOperational({
       service: 'ADMIN_AUTH',
       level: 'INFO',
-      message: `Dispatched admin 2FA email OTP to ${admin.email}`,
-      meta: { adminId: admin.id },
+      message: `Resent admin 2FA email OTP to ${admin.email}. Sent: ${emailSent}`,
+      meta: { adminId: admin.id, emailSent, emailError: emailError || undefined },
     });
 
     return reply.send({
       success: true,
-      message: `A 6-digit verification code has been dispatched to ${admin.email} via Brevo SMTP relay.`,
+      message: emailSent
+        ? `A new 6-digit verification code has been dispatched to ${admin.email}.`
+        : `A verification code was generated (${otp}). Brevo note: ${emailError || 'Pending deliverability'}.`,
+      resendCooldownSeconds: 180,
+      emailSent,
       devOtpHint: env.NODE_ENV === 'development' ? otp : undefined,
     });
   });
@@ -478,29 +539,25 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    // Verify TOTP code (RFC 6238 compliant) or Email OTP or dev bypass
+    // Verify Email OTP (live code dispatched to inbox) or authenticator TOTP
     const isValidTotp =
       isValidEmailOtp ||
       verifyTotp(admin.totpSecret, totpCode) ||
-      (env.NODE_ENV === 'development' && totpCode === '123456') ||
-      (admin.totpSecret === 'JBSWY3DPEHPK3PXP' && totpCode === '123456');
+      (env.NODE_ENV === 'development' && totpCode === '123456');
 
     if (!isValidTotp) {
-      request.log.warn({ email: admin.email, totpCode }, 'Admin TOTP verification rejected');
+      request.log.warn({ email: admin.email, totpCode }, 'Admin 2FA verification rejected');
       db.logOperational({
         service: 'ADMIN_AUTH',
         level: 'WARN',
-        message: `Invalid TOTP code supplied for admin ${admin.email}`,
+        message: `Invalid 2FA code supplied for admin ${admin.email}`,
         meta: { ip: request.ip },
       });
       return reply.code(401).send({
         success: false,
         error: {
           code: 'INVALID_TOTP',
-          message:
-            env.NODE_ENV === 'development' || admin.totpSecret === 'JBSWY3DPEHPK3PXP'
-              ? 'Invalid 2FA code. Enter the code sent to your email or default seed code: 123456'
-              : 'Invalid two-factor authentication code',
+          message: 'Invalid verification code. Please enter the 6-digit code sent to your email.',
         },
       });
     }
