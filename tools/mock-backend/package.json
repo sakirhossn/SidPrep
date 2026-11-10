@@ -1,0 +1,20 @@
+{
+  "name": "@sidprep/mock-backend",
+  "version": "2.0.0",
+  "description": "SidPrep 2.0 Local Test/Dev Mock Server conforming to OpenAPI contract",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@sidprep/contracts": "workspace:*",
+    "fastify": "^4.28.1",
+    "@fastify/cors": "^9.0.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "@types/node": "^20.14.9"
+  }
+}

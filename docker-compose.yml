@@ -1,0 +1,117 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sidprep_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sidprep_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-REPLACE_ME_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-sidprep_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./apps/api/src/db/schema.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    ports:
+      - '127.0.0.1:5432:5432'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.80'
+          memory: 512M
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-sidprep_user} -d ${POSTGRES_DB:-sidprep_db}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: sidprep_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-sidprep_user}:${POSTGRES_PASSWORD:-REPLACE_ME_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sidprep_db}
+      JWT_SECRET: ${JWT_SECRET:-REPLACE_ME_JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-REPLACE_ME_JWT_REFRESH_SECRET}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-REPLACE_ME_ADMIN_SESSION_SECRET}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://sidprep.in,https://api.sidprep.in}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-r2}
+      STORAGE_LOCAL_DIR: ${STORAGE_LOCAL_DIR:-./uploads}
+      R2_ENDPOINT: ${R2_ENDPOINT:-https://REPLACE_ME_ACCOUNT_ID.r2.cloudflarestorage.com}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-REPLACE_ME_R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-REPLACE_ME_R2_SECRET_ACCESS_KEY}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-sidprep-cdn-prod}
+      R2_PUBLIC_DOMAIN: ${R2_PUBLIC_DOMAIN:-https://cdn.sidprep.in}
+      R2_MONTHLY_QUOTA_BYTES: ${R2_MONTHLY_QUOTA_BYTES:-10737418240}
+      BREVO_SMTP_HOST: ${BREVO_SMTP_HOST:-smtp-relay.brevo.com}
+      BREVO_SMTP_PORT: ${BREVO_SMTP_PORT:-587}
+      BREVO_SMTP_USER: ${BREVO_SMTP_USER:-REPLACE_ME_BREVO_SMTP_USER}
+      BREVO_SMTP_PASS: ${BREVO_SMTP_PASS:-REPLACE_ME_BREVO_SMTP_PASS}
+      BREVO_API_KEY: ${BREVO_API_KEY:-brevo-mock-local-key}
+      BREVO_SENDER_EMAIL: ${BREVO_SENDER_EMAIL:-no-reply@sidprep.in}
+      BREVO_SENDER_NAME: ${BREVO_SENDER_NAME:-SidPrep}
+      NEWS_TIMEZONE: ${NEWS_TIMEZONE:-Asia/Kolkata}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@sidprep.in}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-REPLACE_ME_ADMIN_PASSWORD}
+    volumes:
+      - ./uploads:/app/apps/api/uploads
+    ports:
+      - '127.0.0.1:4000:4000'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.60'
+          memory: 384M
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:4000/v1/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+    container_name: sidprep_web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_URL: http://api:4000/v1
+      INTERNAL_API_URL: http://api:4000/v1
+    ports:
+      - '127.0.0.1:3000:3000'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 384M
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: sidprep_caddy
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_started
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

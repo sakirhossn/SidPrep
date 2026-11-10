@@ -1,0 +1,239 @@
+name: Build Android APK & GitHub Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/**'
+      - '.github/workflows/**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag (e.g., v2.0.1)'
+        required: false
+        default: 'v2.0.1'
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build Android Standalone APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle Build Cache
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: false
+
+      - name: Configure Android SDK Environment
+        run: |
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> $GITHUB_ENV
+          yes | ${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Optimize Global Gradle Configuration
+        run: |
+          mkdir -p ~/.gradle
+          printf "org.gradle.daemon=true\norg.gradle.parallel=true\norg.gradle.caching=true\norg.gradle.jvmargs=-Xmx4096m -XX:+UseParallelGC -Dfile.encoding=UTF-8\nandroid.useAndroidX=true\n" > ~/.gradle/gradle.properties
+
+      - name: Install Monorepo Dependencies
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Build Shared Packages (Contracts & Tokens)
+        run: |
+          pnpm --filter @sidprep/contracts build
+          pnpm --filter @sidprep/design-tokens build
+
+      - name: Prebuild Native Android Project
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --clean --no-install
+        env:
+          EXPO_PUBLIC_API_URL: https://api.sidprep.in/v1
+
+      - name: Configure Target Architecture (Physical ARM Devices)
+        working-directory: apps/mobile/android
+        run: |
+          # Target physical ARM devices (arm64-v8a and armeabi-v7a) — skips redundant x86/x86_64 C++ compilation
+          # Prefix with \n to ensure clean line separation after expo prebuild gradle.properties
+          printf "\nreactNativeArchitectures=arm64-v8a,armeabi-v7a\norg.gradle.parallel=true\norg.gradle.caching=true\n" >> gradle.properties
+
+      - name: Build Android Release APK with Gradle
+        working-directory: apps/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease \
+            --parallel \
+            --build-cache \
+            --max-workers=2 \
+            -PreactNativeArchitectures=arm64-v8a,armeabi-v7a \
+            -x lint \
+            -x lintVitalRelease \
+            -x lintVitalAnalyzeRelease \
+            -x test
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx4096m -XX:+UseParallelGC'"
+          JAVA_OPTS: "-Xmx4096m"
+
+      - name: Locate, Sign and Rename APK
+        run: |
+          PKG_VERSION=$(node -p "require('./apps/mobile/package.json').version")
+          TAG_NAME="${{ github.ref_name }}"
+          if [ -z "$TAG_NAME" ] || [[ "$TAG_NAME" == *"main"* ]]; then
+            TAG_NAME="${{ github.event.inputs.release_tag || '' }}"
+            if [ -z "$TAG_NAME" ]; then
+              TAG_NAME="v${PKG_VERSION}"
+            fi
+          fi
+          
+          # Find release APK, preferring signed over unsigned
+          APK_PATH=$(find apps/mobile/android/app/build/outputs/apk -name "*release.apk" ! -name "*unsigned*" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find apps/mobile/android/app/build/outputs/apk -name "*.apk" | head -n 1)
+          fi
+          
+          if [ -z "$APK_PATH" ]; then
+            echo "Error: No APK file was generated."
+            exit 1
+          fi
+          echo "Found APK: $APK_PATH"
+
+          # INVARIANT F24: Stable release signing identity
+          if [[ "$APK_PATH" == *"unsigned"* ]]; then
+            BUILD_TOOLS_DIR=$(ls -d ${ANDROID_HOME}/build-tools/* | sort -V | tail -n 1)
+            $BUILD_TOOLS_DIR/zipalign -v -p 4 "$APK_PATH" apps/mobile/android/app/build/outputs/apk/aligned.apk
+            
+            if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+              echo "Signing APK with protected release keystore from repository secrets..."
+              RELEASE_KEYSTORE="$HOME/.android/release.keystore"
+              mkdir -p "$HOME/.android"
+              echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > "$RELEASE_KEYSTORE"
+              $BUILD_TOOLS_DIR/apksigner sign --ks "$RELEASE_KEYSTORE" \
+                --ks-pass pass:"${{ secrets.RELEASE_KEYSTORE_PASSWORD }}" \
+                --ks-key-alias "${{ secrets.RELEASE_KEY_ALIAS || 'sidprep-release' }}" \
+                --key-pass pass:"${{ secrets.RELEASE_KEY_PASSWORD || secrets.RELEASE_KEYSTORE_PASSWORD }}" \
+                --out apps/mobile/android/app/build/outputs/apk/signed.apk apps/mobile/android/app/build/outputs/apk/aligned.apk
+            else
+              echo "WARNING: RELEASE_KEYSTORE_BASE64 not configured in secrets. Signing with deterministic CI development keystore..."
+              DEV_KEYSTORE="$HOME/.android/ci-dev.keystore"
+              mkdir -p "$HOME/.android"
+              if [ ! -f "$DEV_KEYSTORE" ]; then
+                keytool -genkey -v -keystore "$DEV_KEYSTORE" -storepass sidprep-ci-pass -alias sidprep-ci-key -keypass sidprep-ci-pass -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=SidPrep CI,OU=Mobile,O=SidPrep,C=IN"
+              fi
+              $BUILD_TOOLS_DIR/apksigner sign --ks "$DEV_KEYSTORE" --ks-pass pass:sidprep-ci-pass --key-pass pass:sidprep-ci-pass --out apps/mobile/android/app/build/outputs/apk/signed.apk apps/mobile/android/app/build/outputs/apk/aligned.apk
+            fi
+            
+            # Verify signature with apksigner
+            $BUILD_TOOLS_DIR/apksigner verify --verbose apps/mobile/android/app/build/outputs/apk/signed.apk
+            APK_PATH="apps/mobile/android/app/build/outputs/apk/signed.apk"
+          fi
+          
+          mkdir -p release-artifacts
+          cp "$APK_PATH" "release-artifacts/SidPrep-Student-${TAG_NAME}.apk"
+          cp "$APK_PATH" "release-artifacts/SidPrep-Student-release.apk"
+
+          # Generate Update File (update.json & version.json) for in-app updates and release automation
+          SHA256_HASH=$(sha256sum "$APK_PATH" | awk '{print $1}')
+          FILE_SIZE=$(stat -c%s "$APK_PATH" 2>/dev/null || stat -f%z "$APK_PATH" 2>/dev/null || wc -c < "$APK_PATH")
+
+          PKG_VERSION="$PKG_VERSION" TAG_NAME="$TAG_NAME" SHA256_HASH="$SHA256_HASH" FILE_SIZE="$FILE_SIZE" node -e '
+            const fs = require("fs");
+            const updateData = {
+              version: process.env.PKG_VERSION,
+              currentVersion: process.env.PKG_VERSION,
+              tag: process.env.TAG_NAME,
+              minVersion: "2.0.0",
+              apkUrl: `https://github.com/sakirhossn/SidPrep/releases/download/${process.env.TAG_NAME}/SidPrep-Student-${process.env.TAG_NAME}.apk`,
+              latestApkUrl: "https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk",
+              releaseUrl: `https://github.com/sakirhossn/SidPrep/releases/tag/${process.env.TAG_NAME}`,
+              releaseNotes: `SidPrep ${process.env.TAG_NAME}: Student Android Companion release with full syllabus structures, offline-aware test runner, Brevo OTP authentication, and dynamic page CMS.`,
+              publishedAt: new Date().toISOString(),
+              sha256: process.env.SHA256_HASH,
+              sizeBytes: Number(process.env.FILE_SIZE) || 0
+            };
+            fs.writeFileSync("release-artifacts/update.json", JSON.stringify(updateData, null, 2));
+            fs.writeFileSync("release-artifacts/version.json", JSON.stringify(updateData, null, 2));
+          '
+
+          echo "OUTPUT_APK=release-artifacts/SidPrep-Student-${TAG_NAME}.apk" >> $GITHUB_ENV
+          echo "LATEST_APK=release-artifacts/SidPrep-Student-release.apk" >> $GITHUB_ENV
+          echo "UPDATE_JSON=release-artifacts/update.json" >> $GITHUB_ENV
+          echo "VERSION_JSON=release-artifacts/version.json" >> $GITHUB_ENV
+          echo "RESOLVED_TAG=${TAG_NAME}" >> $GITHUB_ENV
+          echo "APK_SHA256=${SHA256_HASH}" >> $GITHUB_ENV
+
+      - name: Upload APK and Update Files as Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SidPrep-Student-APK
+          path: |
+            ${{ env.OUTPUT_APK }}
+            ${{ env.LATEST_APK }}
+            ${{ env.UPDATE_JSON }}
+            ${{ env.VERSION_JSON }}
+          retention-days: 30
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.RESOLVED_TAG }}
+          name: SidPrep ${{ env.RESOLVED_TAG }} — Student Android App & System Release
+          body: |
+            ### SidPrep ${{ env.RESOLVED_TAG }} Official Student Android Release
+            
+            **Release Tag:** `${{ env.RESOLVED_TAG }}`
+            **Architecture:** Android-first (Universal standalone APK)
+            **Design System:** Ink & Moss v2 (#28563F, #1E3C2C, #DFF19B, #F7F7F2)
+            
+            #### Features Included in this Build:
+            - **Automatic Updates Integration** — Mobile client queries `update.json` / `/v1/app/version` and automatically prompts / downloads new APK builds.
+            - **Brevo SMTP Verification** — 6-digit email OTPs for passwordless student sign-in and registration.
+            - **Dynamic Page CMS** — Access all updated study guides, announcements, and commission notifications.
+            - **Offline-Aware Test Runner** with monotonic SQLite answer sync.
+            - **Question Palette & Authoritative Scoring** (+2.0 / -0.5 negative marking).
+            - **Daily Current Affairs Briefs** with verified source citations.
+            - **Educational Document Viewer** with preview/download gating.
+            
+            #### Verification & Checksum:
+            - **SHA-256 Checksum:** `${{ env.APK_SHA256 }}`
+            - **Update Metadata:** `update.json` / `version.json`
+            
+            #### Installation:
+            1. Download `SidPrep-Student-${{ env.RESOLVED_TAG }}.apk` or `SidPrep-Student-release.apk` below to your Android device.
+            2. Tap to install (enable "Install Unknown Apps" for your browser if prompted).
+          files: |
+            ${{ env.OUTPUT_APK }}
+            ${{ env.LATEST_APK }}
+            ${{ env.UPDATE_JSON }}
+            ${{ env.VERSION_JSON }}
+          draft: false
+          prerelease: false

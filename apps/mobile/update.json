@@ -1,0 +1,12 @@
+{
+  "version": "2.0.1",
+  "currentVersion": "2.0.1",
+  "tag": "v2.0.1",
+  "minVersion": "2.0.0",
+  "apkUrl": "https://github.com/sakirhossn/SidPrep/releases/download/v2.0.1/SidPrep-Student-v2.0.1.apk",
+  "latestApkUrl": "https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk",
+  "releaseUrl": "https://github.com/sakirhossn/SidPrep/releases/tag/v2.0.1",
+  "releaseNotes": "SidPrep 2.0.1: Full exam preparation features, Brevo OTP integration, dynamic page CMS, and offline-aware test runner.",
+  "publishedAt": "2026-11-06T13:38:49Z",
+  "fileName": "SidPrep-Student-release.apk"
+}

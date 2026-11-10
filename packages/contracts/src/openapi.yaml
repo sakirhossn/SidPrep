@@ -1,0 +1,1042 @@
+openapi: 3.1.0
+info:
+  title: SidPrep 2.0 Shared API
+  version: 2.0.0
+  description: >
+    Production REST API serving the SidPrep Student Mobile App, Public Web, and Admin CMS.
+    Designed for zero-cost operation on Oracle Cloud Always Free (2 A1 OCPUs, 12 GB RAM)
+    with strict rate limiting, transactional integrity, and offline sync support.
+servers:
+  - url: https://api.sidprep.in/v1
+    description: Production API
+  - url: http://localhost:4000/v1
+    description: Local Development Server
+
+paths:
+  /health:
+    get:
+      summary: System health and quota summary
+      operationId: getHealth
+      responses:
+        '200':
+          description: Healthy status with service uptime and component indicators
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /auth/student/challenge:
+    post:
+      summary: Request Brevo email OTP challenge
+      operationId: requestStudentOtp
+      description: Rate-limited, enumeration-resistant endpoint. Emits email via Brevo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Challenge issued (always returns success to prevent enumeration)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtpChallengeResponse'
+        '429':
+          description: Rate limit exceeded
+
+  /auth/student/verify:
+    post:
+      summary: Verify email OTP and obtain JWT tokens
+      operationId: verifyStudentOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, otp]
+              properties:
+                email:
+                  type: string
+                  format: email
+                otp:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+      responses:
+        '200':
+          description: Verification successful, returns access & refresh tokens
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccessResponse'
+        '401':
+          description: Invalid or expired OTP
+
+  /auth/refresh:
+    post:
+      summary: Refresh access token using refresh token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccessResponse'
+
+  /auth/admin/login:
+    post:
+      summary: Admin initial login with email and password
+      operationId: adminLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Password valid; requires TOTP step
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [preAuthToken, requiresTotp]
+                properties:
+                  preAuthToken:
+                    type: string
+                  requiresTotp:
+                    type: boolean
+                    example: true
+
+  /auth/admin/verify-totp:
+    post:
+      summary: Admin complete 2FA TOTP verification
+      operationId: adminVerifyTotp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [preAuthToken, totpCode]
+              properties:
+                preAuthToken:
+                  type: string
+                totpCode:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAuthResponse'
+
+  /home:
+    get:
+      summary: Aggregated student home dashboard
+      operationId: getHomeDashboard
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HomeDashboard'
+
+  /me:
+    get:
+      summary: Current student profile
+      operationId: getMe
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+    patch:
+      summary: Update student profile and exam preferences
+      operationId: updateMe
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StudentProfile'
+
+  /exams:
+    get:
+      summary: List all official exams and verified stages
+      operationId: listExams
+      parameters:
+        - in: query
+          name: family
+          schema:
+            type: string
+            enum: [SSC, RRB, WBPSC, IBPS]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExamItem'
+
+  /exams/{id}:
+    get:
+      summary: Get details, verified pattern and syllabus of an exam
+      operationId: getExamDetails
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExamDetail'
+
+  /tests:
+    get:
+      summary: List mock catalogue tests
+      operationId: listTests
+      parameters:
+        - in: query
+          name: examId
+          schema:
+            type: string
+        - in: query
+          name: type
+          schema:
+            type: string
+            enum: [FULL, SECTIONAL, TOPIC, PYQ]
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestListResponse'
+
+  /tests/{id}:
+    get:
+      summary: Get test configuration, sections, and instructions
+      operationId: getTest
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestDetail'
+
+  /attempts:
+    post:
+      summary: Start a new test attempt (server creates session & timer)
+      operationId: startAttempt
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [testId]
+              properties:
+                testId:
+                  type: string
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttemptSession'
+
+  /attempts/{id}/submit:
+    post:
+      summary: Submit test attempt and compute authoritative score
+      operationId: submitAttempt
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitAttemptRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttemptResult'
+
+  /sync/answers:
+    post:
+      summary: Transactional idempotent offline answer batch synchronization
+      operationId: syncAnswers
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncAnswerBatchRequest'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncAnswerBatchResponse'
+
+  /current-affairs:
+    get:
+      summary: Public and student current affairs news feed
+      operationId: listCurrentAffairs
+      parameters:
+        - in: query
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: exam
+          schema:
+            type: string
+            enum: [SSC, RRB, WBPSC, IBPS]
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentAffairsResponse'
+
+  /quizzes/daily:
+    get:
+      summary: Daily practice quiz for current affairs
+      operationId: getDailyQuiz
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailyQuiz'
+
+  /resources:
+    get:
+      summary: Search and list educational resources and notes
+      operationId: listResources
+      parameters:
+        - in: query
+          name: exam
+          schema:
+            type: string
+        - in: query
+          name: subject
+          schema:
+            type: string
+        - in: query
+          name: search
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceListResponse'
+
+  /resources/{id}/preview:
+    get:
+      summary: View in-browser or in-app safe sanitized preview
+      operationId: previewResource
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Safe HTML or PDF preview stream / metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourcePreview'
+
+  /resources/{id}/download:
+    get:
+      summary: Obtain short-lived signed download URL (strictly checked against downloadAllowed)
+      operationId: downloadResource
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [downloadUrl, expiresAt]
+                properties:
+                  downloadUrl:
+                    type: string
+                  expiresAt:
+                    type: string
+                    format: date-time
+        '403':
+          description: Download not permitted by administrative policy
+
+  /telemetry:
+    post:
+      summary: Batched, rate-limited, privacy-sanitized client telemetry
+      operationId: postTelemetry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelemetryBatch'
+      responses:
+        '202':
+          description: Telemetry events accepted for asynchronous batch processing
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status, uptimeSeconds, timestamp, checks]
+      properties:
+        status:
+          type: string
+          example: 'healthy'
+        uptimeSeconds:
+          type: number
+        timestamp:
+          type: string
+          format: date-time
+        checks:
+          type: object
+          properties:
+            database:
+              type: string
+              example: 'connected'
+            worker:
+              type: string
+              example: 'active'
+            storage:
+              type: string
+              example: 'operational'
+            brevoQuota:
+              type: object
+              properties:
+                usedToday:
+                  type: integer
+                limit:
+                  type: integer
+                  default: 300
+
+    OtpChallengeResponse:
+      type: object
+      required: [success, message, expiresAtSeconds]
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: 'If an account exists or is eligible, an OTP has been sent.'
+        expiresAtSeconds:
+          type: integer
+          example: 600
+
+    AuthSuccessResponse:
+      type: object
+      required: [accessToken, refreshToken, expiresIn, user]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+          example: 3600
+        user:
+          $ref: '#/components/schemas/StudentProfile'
+
+    AdminAuthResponse:
+      type: object
+      required: [adminToken, role, name, email]
+      properties:
+        adminToken:
+          type: string
+        role:
+          type: string
+          enum: [SUPER_ADMIN, CONTENT_MANAGER, EXAM_EDITOR, REVIEWER, CA_EDITOR, TRANSLATOR, SUPPORT, ANALYST, AUDITOR]
+        name:
+          type: string
+        email:
+          type: string
+
+    StudentProfile:
+      type: object
+      required: [id, email, preferredLanguage, targetExams, dailyGoalMinutes]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        preferredLanguage:
+          type: string
+          enum: [en, hi, bn]
+        targetExams:
+          type: array
+          items:
+            type: string
+        dailyGoalMinutes:
+          type: integer
+        streakDays:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        preferredLanguage:
+          type: string
+          enum: [en, hi, bn]
+        targetExams:
+          type: array
+          items:
+            type: string
+        dailyGoalMinutes:
+          type: integer
+
+    HomeDashboard:
+      type: object
+      required: [primaryExam, targetMinutes, streakDays, recommendedMocks, latestNews]
+      properties:
+        primaryExam:
+          type: object
+          required: [id, name, family, status]
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            family:
+              type: string
+            status:
+              type: string
+            nextExamDate:
+              type: string
+              nullable: true
+            isOfficialDate:
+              type: boolean
+        targetMinutes:
+          type: integer
+        todayMinutesSpent:
+          type: integer
+        streakDays:
+          type: integer
+        overallAccuracy:
+          type: number
+        recommendedMocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TestSummary'
+        latestNews:
+          type: array
+          items:
+            $ref: '#/components/schemas/CurrentAffairsSummary'
+
+    ExamItem:
+      type: object
+      required: [id, family, name, code, stagesCount, verifiedDate, sourceUrl]
+      properties:
+        id:
+          type: string
+        family:
+          type: string
+          enum: [SSC, RRB, WBPSC, IBPS]
+        name:
+          type: string
+        code:
+          type: string
+        stagesCount:
+          type: integer
+        verifiedDate:
+          type: string
+          format: date
+        sourceUrl:
+          type: string
+
+    ExamDetail:
+      allOf:
+        - $ref: '#/components/schemas/ExamItem'
+        - type: object
+          required: [stages, syllabusTree]
+          properties:
+            stages:
+              type: array
+              items:
+                type: object
+                required: [id, name, stageNumber, totalMarks, durationMinutes, negativeMarkRatio]
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  stageNumber:
+                    type: integer
+                  totalMarks:
+                    type: number
+                  durationMinutes:
+                    type: integer
+                  negativeMarkRatio:
+                    type: number
+            syllabusTree:
+              type: array
+              items:
+                type: object
+                required: [subject, weightPercentage, topics]
+                properties:
+                  subject:
+                    type: string
+                  weightPercentage:
+                    type: number
+                  topics:
+                    type: array
+                    items:
+                      type: string
+
+    TestSummary:
+      type: object
+      required: [id, title, examCode, type, durationMinutes, totalQuestions, totalMarks, isFree]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        examCode:
+          type: string
+        type:
+          type: string
+          enum: [FULL, SECTIONAL, TOPIC, PYQ]
+        durationMinutes:
+          type: integer
+        totalQuestions:
+          type: integer
+        totalMarks:
+          type: number
+        isFree:
+          type: boolean
+
+    TestDetail:
+      allOf:
+        - $ref: '#/components/schemas/TestSummary'
+        - type: object
+          required: [sections, instructions]
+          properties:
+            sections:
+              type: array
+              items:
+                type: object
+                required: [id, title, questionCount, durationMinutes, sectionLock]
+                properties:
+                  id:
+                    type: string
+                  title:
+                    type: string
+                  questionCount:
+                    type: integer
+                  durationMinutes:
+                    type: integer
+                  sectionLock:
+                    type: boolean
+            instructions:
+              type: array
+              items:
+                type: string
+
+    TestListResponse:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TestSummary'
+        pagination:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    AttemptSession:
+      type: object
+      required: [attemptId, testId, startedAt, durationSeconds, questions]
+      properties:
+        attemptId:
+          type: string
+        testId:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        durationSeconds:
+          type: integer
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttemptQuestion'
+
+    AttemptQuestion:
+      type: object
+      required: [id, sectionId, sequence, text, options, positiveMarks, negativeMarks]
+      properties:
+        id:
+          type: string
+        sectionId:
+          type: string
+        sequence:
+          type: integer
+        text:
+          type: string
+        options:
+          type: array
+          items:
+            type: object
+            required: [id, text]
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+        positiveMarks:
+          type: number
+        negativeMarks:
+          type: number
+
+    SubmitAttemptRequest:
+      type: object
+      required: [answers, timeSpentSeconds]
+      properties:
+        answers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SubmittedAnswer'
+        timeSpentSeconds:
+          type: integer
+
+    SubmittedAnswer:
+      type: object
+      required: [questionId, selectedOptionId, clientSequence, isMarkedForReview]
+      properties:
+        questionId:
+          type: string
+        selectedOptionId:
+          type: string
+          nullable: true
+        clientSequence:
+          type: integer
+        isMarkedForReview:
+          type: boolean
+
+    AttemptResult:
+      type: object
+      required: [attemptId, score, maxScore, accuracy, timeTakenSeconds, correctCount, wrongCount, unattemptedCount, sectionBreakdown]
+      properties:
+        attemptId:
+          type: string
+        score:
+          type: number
+        maxScore:
+          type: number
+        accuracy:
+          type: number
+        timeTakenSeconds:
+          type: integer
+        correctCount:
+          type: integer
+        wrongCount:
+          type: integer
+        unattemptedCount:
+          type: integer
+        sectionBreakdown:
+          type: array
+          items:
+            type: object
+            required: [sectionTitle, score, maxMarks, accuracy]
+            properties:
+              sectionTitle:
+                type: string
+              score:
+                type: number
+              maxMarks:
+                type: number
+              accuracy:
+                type: number
+
+    SyncAnswerBatchRequest:
+      type: object
+      required: [attemptId, items]
+      properties:
+        attemptId:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            required: [questionId, selectedOptionId, clientSequence, timestamp]
+            properties:
+              questionId:
+                type: string
+              selectedOptionId:
+                type: string
+                nullable: true
+              clientSequence:
+                type: integer
+              timestamp:
+                type: string
+                format: date-time
+
+    SyncAnswerBatchResponse:
+      type: object
+      required: [syncedCount, pendingSequence, success]
+      properties:
+        syncedCount:
+          type: integer
+        pendingSequence:
+          type: integer
+        success:
+          type: boolean
+
+    CurrentAffairsSummary:
+      type: object
+      required: [id, title, originalSummary, category, targetExams, publishedAt, sourceName, sourceUrl]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        originalSummary:
+          type: string
+        category:
+          type: string
+        targetExams:
+          type: array
+          items:
+            type: string
+        publishedAt:
+          type: string
+          format: date-time
+        sourceName:
+          type: string
+        sourceUrl:
+          type: string
+
+    CurrentAffairsResponse:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CurrentAffairsSummary'
+        pagination:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    DailyQuiz:
+      type: object
+      required: [id, date, title, questions]
+      properties:
+        id:
+          type: string
+        date:
+          type: string
+          format: date
+        title:
+          type: string
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttemptQuestion'
+
+    ResourceItem:
+      type: object
+      required: [id, title, description, exam, subject, fileType, fileSizeBytes, previewAllowed, downloadAllowed, verifiedDate]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        exam:
+          type: string
+        subject:
+          type: string
+        fileType:
+          type: string
+          enum: [PDF, DOCX, PNG, JPEG]
+        fileSizeBytes:
+          type: integer
+        previewAllowed:
+          type: boolean
+        downloadAllowed:
+          type: boolean
+        verifiedDate:
+          type: string
+          format: date
+
+    ResourceListResponse:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResourceItem'
+        pagination:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    ResourcePreview:
+      type: object
+      required: [resourceId, previewType, content]
+      properties:
+        resourceId:
+          type: string
+        previewType:
+          type: string
+          enum: [HTML, PDF_URL, IMAGE_URL]
+        content:
+          type: string
+          description: Sanitized HTML preview or short-lived signed preview URL
+
+    TelemetryBatch:
+      type: object
+      required: [appVersion, os, events]
+      properties:
+        appVersion:
+          type: string
+        os:
+          type: string
+          enum: [android, ios]
+        events:
+          type: array
+          items:
+            type: object
+            required: [eventCode, timestamp, correlationId]
+            properties:
+              eventCode:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+              correlationId:
+                type: string
+              metadata:
+                type: object
+
+    PaginationMeta:
+      type: object
+      required: [total, page, limit, totalPages]
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
