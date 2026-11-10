@@ -21,6 +21,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=4000
 
+# Prepare uploads directory and ensure non-root node ownership
+RUN mkdir -p /app/uploads/resources && chown -R node:node /app
+
 # Security: Non-root execution
 USER node
 

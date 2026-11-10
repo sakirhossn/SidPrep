@@ -2550,3 +2550,32 @@ This section details the code changes made to eliminate five confirmed security 
 
 ### 4. Impact
 - Unblocks automated APK building and GitHub Release deployment on all tag and push events.
+
+
+---
+
+## 18. Container Upload Storage Mount & Non-Root File System Permissions Alignment
+
+**Execution Timestamp**: `2026-11-10T13:25:00+05:30`  
+**Target Invariant**: Production Container Deployment & Non-Root Security Policy
+
+### 1. Before Changes
+- **Relevant File Paths**: `apps/api/Dockerfile`, `apps/api/src/modules/resources/index.ts`, `docker-compose.yml`
+- **Original Code & Functionality**:
+  - `apps/api/Dockerfile` switched to non-root `USER node` without pre-creating `/app/uploads/resources` or assigning ownership of `/app` to `node:node`.
+  - `docker-compose.yml` mounted host `./uploads` into `/app/apps/api/uploads`, whereas the Node.js application process runs at `/app` and expects `./uploads` at `/app/uploads`.
+  - In `apps/api/src/modules/resources/index.ts`, top-level module load executed `fs.mkdirSync(uploadsDir, { recursive: true })` without exception handling, causing the container to crash with `EACCES: permission denied, mkdir '/app/uploads/resources'`.
+
+### 2. Changes Made
+- Modified `apps/api/Dockerfile`:
+  - Added `RUN mkdir -p /app/uploads/resources && chown -R node:node /app` prior to switching to non-root `USER node`.
+- Modified `docker-compose.yml`:
+  - Aligned the volume mapping: `- ./uploads:/app/uploads`.
+- Modified `apps/api/src/modules/resources/index.ts`:
+  - Enclosed directory initialization in a structured `try / catch` block with graceful warning logging to prevent top-level module load crashes.
+
+### 3. After Changes
+- API container starts cleanly with non-root privileges (`USER node`), having verified ownership and write access to the shared uploads volume.
+
+### 4. Impact
+- Eliminates fatal container startup crash and completes zero-downtime containerized production deployments.

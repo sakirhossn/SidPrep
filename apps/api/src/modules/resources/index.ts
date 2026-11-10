@@ -9,8 +9,12 @@ import { getSignedDownloadUrl } from '../../lib/storage.js';
 import { ResourceCreateSchema } from '@sidprep/contracts';
 
 const uploadsDir = path.resolve(process.cwd(), 'uploads', 'resources');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+try {
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+} catch (err) {
+  console.warn('[Resources] Warning: could not initialize local uploads directory:', (err as Error).message);
 }
 
 export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
