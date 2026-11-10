@@ -2579,3 +2579,36 @@ This section details the code changes made to eliminate five confirmed security 
 
 ### 4. Impact
 - Eliminates fatal container startup crash and completes zero-downtime containerized production deployments.
+
+
+---
+
+## 19. Docker Compose API Healthcheck IPv4 Loopback & Startup Period Hardening
+
+**Execution Timestamp**: `2026-11-10T13:28:00+05:30`  
+**Target Invariant**: Production Container Orchestration & Zero-Downtime Healthchecks
+
+### 1. Before Changes
+- **Relevant File Paths**: `docker-compose.yml`
+- **Original Code & Functionality**:
+  ```yaml
+  healthcheck:
+    test: ['CMD-SHELL', 'wget -qO- http://localhost:4000/v1/health || exit 1']
+    interval: 15s
+    timeout: 5s
+    retries: 3
+  ```
+  - In Alpine Linux containers, `localhost` resolves to IPv6 `::1` by default, whereas Fastify binds explicitly to IPv4 `0.0.0.0:4000`. This caused `wget` inside the container to receive `Connection refused` over IPv6, falsely marking the running API container as unhealthy and preventing dependent services (Caddy reverse proxy) from starting.
+  - No `start_period` was configured, meaning database migration execution time counted against the failure threshold.
+
+### 2. Changes Made
+- Modified `docker-compose.yml`:
+  - Updated healthcheck test to explicit IPv4 loopback: `wget -qO- http://127.0.0.1:4000/v1/health || exit 1`.
+  - Added `start_period: 15s` and increased retries to `5` with `10s` interval.
+
+### 3. After Changes
+- Healthcheck directly queries IPv4 loopback socket, immediately detecting service readiness once migrations finish.
+- Caddy reverse proxy starts smoothly once API health check transitions to `healthy`.
+
+### 4. Impact
+- Resolves container dependency deadlock and guarantees seamless startup of the full production container stack.
