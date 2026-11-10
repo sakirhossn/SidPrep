@@ -2492,3 +2492,26 @@ This section details the code changes made to eliminate five confirmed security 
 3. **Change Register Status**:
    - Updated `audit/Change_Register.csv`: F32 transitioned to `Implemented & Verified in Batch 6`.
    - **Total audit findings resolved**: 33 / 33 (100% completed).
+
+
+---
+
+## 16. Release Version Bump: SidPrep 2.0.2 APK & Auto-Updater Descriptors
+
+**Execution Timestamp**: `2026-11-10T12:45:00+05:30`  
+**Target Release**: `v2.0.2` (Android versionCode: `202`)
+
+### 1. Before Changes
+- `apps/mobile/package.json` and `apps/mobile/app.json` were at version `2.0.1` (versionCode: `201`).
+- `apps/api/src/db/index.ts` advertised `currentVersion: '2.0.1'`.
+
+### 2. Changes Made
+- Bumped `apps/mobile/package.json` to `"version": "2.0.2"`.
+- Bumped `apps/mobile/app.json` to `"version": "2.0.2"` and monotonic Android integer `"versionCode": 202`.
+- Updated API update descriptor in `apps/api/src/db/index.ts` to `currentVersion: '2.0.2'` and updated release notes reflecting full audit production hardening.
+
+### 3. After Changes
+- Full alignment between mobile app runtime, APK package manifest, API version checks, and GitHub Release automation.
+
+### 4. Impact
+- Enables seamless over-the-air APK upgrade detection for students, allowing in-place Android updates without data loss.
