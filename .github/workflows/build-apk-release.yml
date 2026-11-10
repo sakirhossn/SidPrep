@@ -64,7 +64,7 @@ jobs:
           printf "org.gradle.daemon=true\norg.gradle.parallel=true\norg.gradle.caching=true\norg.gradle.jvmargs=-Xmx4096m -XX:+UseParallelGC -Dfile.encoding=UTF-8\nandroid.useAndroidX=true\n" > ~/.gradle/gradle.properties
 
       - name: Install Monorepo Dependencies
-        run: pnpm install --frozen-lockfile || pnpm install
+        run: pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile
 
       - name: Build Shared Packages (Contracts & Tokens)
         run: |

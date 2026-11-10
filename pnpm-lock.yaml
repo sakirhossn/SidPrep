@@ -420,6 +420,28 @@ importers:
         specifier: ^5.5.4
         version: 5.9.3
 
+  tools/mock-backend:
+    dependencies:
+      '@fastify/cors':
+        specifier: ^9.0.1
+        version: 9.0.1
+      '@sidprep/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      fastify:
+        specifier: ^4.28.1
+        version: 4.29.1
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.9
+        version: 20.19.43
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+
 packages:
 
   2g@1.0.1:

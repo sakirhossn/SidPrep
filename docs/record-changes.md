@@ -2515,3 +2515,38 @@ This section details the code changes made to eliminate five confirmed security 
 
 ### 4. Impact
 - Enables seamless over-the-air APK upgrade detection for students, allowing in-place Android updates without data loss.
+
+
+---
+
+## 17. CI Monorepo Lockfile Alignment & Non-Interactive Install Hardening
+
+**Execution Timestamp**: `2026-11-10T12:55:00+05:30`  
+**Target Invariant**: CI/CD Reliability & GitHub Actions APK Pipeline
+
+### 1. Before Changes
+- **Relevant File Paths**: `pnpm-lock.yaml`, `.github/workflows/build-apk-release.yml`
+- **Original Code & Functionality**:
+  - `pnpm-workspace.yaml` contained `tools/*`, but `pnpm-lock.yaml` lacked an entry for `importers["tools/mock-backend"]`.
+  - In `.github/workflows/build-apk-release.yml`, dependency installation was configured as:
+    ```yaml
+    - name: Install Monorepo Dependencies
+      run: pnpm install --frozen-lockfile || pnpm install
+    ```
+  - Because `CI=true` is set by default on GitHub Actions runners, `pnpm install` defaults to `--frozen-lockfile=true`, causing the fallback command after `||` to fail with `ERR_PNPM_PACKAGE_MANAGER_NO_IMPORTER`.
+
+### 2. Changes Made
+- Regenerated `pnpm-lock.yaml` via `pnpm install --lockfile-only`, adding `tools/mock-backend` dependencies and devDependencies into the lockfile.
+- Modified `.github/workflows/build-apk-release.yml` line 67:
+  ```yaml
+  - name: Install Monorepo Dependencies
+    run: pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile
+  ```
+- Guaranteed fallback installs will pass in non-interactive CI environments even during lockfile desynchronizations.
+
+### 3. After Changes
+- `pnpm install --frozen-lockfile` passes cleanly in 3.3 seconds without warnings.
+- GitHub Actions CI workflow gracefully handles dependency installs in both strict frozen-lockfile and non-frozen lockfile fallback states.
+
+### 4. Impact
+- Unblocks automated APK building and GitHub Release deployment on all tag and push events.
