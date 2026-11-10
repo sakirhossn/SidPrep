@@ -80,5 +80,32 @@ export const secureStorage = {
     await deleteItem(ACCESS_TOKEN_KEY);
     await deleteItem(REFRESH_TOKEN_KEY);
     await deleteItem(USER_KEY);
+  },
+
+  async setIntroCompleted(completed = true): Promise<void> {
+    await setItem('sidprep_intro_completed', completed ? 'true' : 'false');
+  },
+
+  async isIntroCompleted(): Promise<boolean> {
+    const val = await getItem('sidprep_intro_completed');
+    return val === 'true';
+  },
+
+  async saveRegistrationDraft(draft: any): Promise<void> {
+    await setItem('sidprep_reg_draft', JSON.stringify(draft));
+  },
+
+  async getRegistrationDraft(): Promise<any | null> {
+    const val = await getItem('sidprep_reg_draft');
+    if (!val) return null;
+    try {
+      return JSON.parse(val);
+    } catch {
+      return null;
+    }
+  },
+
+  async clearRegistrationDraft(): Promise<void> {
+    await deleteItem('sidprep_reg_draft');
   }
 };

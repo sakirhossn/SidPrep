@@ -1,8 +1,16 @@
 export interface StudentUser {
   id: string;
   email: string;
+  firstName?: string;
+  lastName?: string;
+  isSingleName?: boolean;
   phone?: string | null;
+  phoneCountryCode?: string;
+  isPhoneVerified?: boolean;
+  isProfileComplete?: boolean;
   targetExams?: string[];
+  selectedExamIds?: string[];
+  primaryExamId?: string | null;
   preferredLanguage?: 'en' | 'hi' | 'bn';
   dailyGoalMinutes?: number;
   streakDays?: number;

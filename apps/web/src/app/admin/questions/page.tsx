@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import { HelpCircle, Plus, Upload, CheckCircle2, AlertCircle, FileText, Globe, Loader2 } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+import { getApiBaseUrl } from '@/lib/api-client';
+
+const API_BASE = getApiBaseUrl();
 
 export default function AdminQuestionsPage() {
   const [activeTab, setActiveTab] = useState<'LIST' | 'CREATE' | 'IMPORT'>('LIST');

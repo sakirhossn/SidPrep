@@ -2,13 +2,27 @@ import type { FastifyPluginAsync } from 'fastify';
 import { db, StudentRecord } from '../../db/index.js';
 import { verifyJwt } from '../../lib/security.js';
 import { requireAdminAuth } from '../../lib/adminAuth.js';
+import { requireStudentAuth } from '../../lib/studentAuth.js';
 
 function formatStudentProfile(student: StudentRecord) {
   const targetExams = student.targetExams || [];
-  const primaryExamId = targetExams[0] || 'ssc_cgl';
+  const primaryExamId = student.primaryExamId || targetExams[0] || 'ssc_cgl';
   const dailyMinutes = student.dailyGoalMinutes || 60;
+  const isProfileComplete = Boolean(
+    student.firstName &&
+    (student.lastName || student.isSingleName) &&
+    student.phone &&
+    targetExams.length > 0
+  );
+
   return {
     ...student,
+    firstName: student.firstName || '',
+    lastName: student.lastName || '',
+    isSingleName: Boolean(student.isSingleName),
+    phone: student.phone || '',
+    phoneCountryCode: student.phoneCountryCode || '+91',
+    isPhoneVerified: Boolean(student.isPhoneVerified),
     targetExams,
     selectedExamIds: targetExams,
     primaryExamId,
@@ -16,31 +30,17 @@ function formatStudentProfile(student: StudentRecord) {
     dailyTargetMinutes: dailyMinutes,
     completedTasks: student.completedTasks || [],
     settings: student.settings || {},
+    isProfileComplete,
   };
 }
 
 export const userRoutes: FastifyPluginAsync = async (fastify) => {
   /**
    * GET /me
-   * Get current student profile
+   * Get current student profile (Strictly authenticated, active, unrevoked)
    */
-  fastify.get('/me', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Student token required' } });
-    }
-
-    const token = authHeader.substring(7);
-    const decoded = verifyJwt<{ sub: string }>(token);
-    if (!decoded?.sub) {
-      return reply.code(401).send({ success: false, error: { code: 'INVALID_TOKEN', message: 'Token invalid' } });
-    }
-
-    const student = db.students.get(decoded.sub);
-    if (!student) {
-      return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Student profile not found' } });
-    }
-
+  fastify.get('/me', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
+    const student = request.student!.record;
     return reply.send(formatStudentProfile(student));
   });
 
@@ -48,29 +48,26 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
    * PATCH /me
    * Update student profile preferences
    */
-  fastify.patch('/me', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Student token required' } });
-    }
-
-    const token = authHeader.substring(7);
-    const decoded = verifyJwt<{ sub: string }>(token);
-    if (!decoded?.sub) {
-      return reply.code(401).send({ success: false, error: { code: 'INVALID_TOKEN', message: 'Token invalid' } });
-    }
-
-    const student = db.students.get(decoded.sub);
-    if (!student) {
-      return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Student profile not found' } });
-    }
-
+  fastify.patch('/me', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
+    const student = request.student!.record;
     const body = request.body as any;
+
+    if (body.firstName !== undefined) student.firstName = String(body.firstName).trim();
+    if (body.lastName !== undefined) student.lastName = String(body.lastName).trim();
+    if (body.isSingleName !== undefined) student.isSingleName = Boolean(body.isSingleName);
+    if (body.phone !== undefined) student.phone = String(body.phone).trim();
+    if (body.phoneCountryCode !== undefined) student.phoneCountryCode = String(body.phoneCountryCode).trim();
     if (body.preferredLanguage) student.preferredLanguage = body.preferredLanguage;
+
     const targetExams = body.targetExams || body.selectedExamIds;
-    if (Array.isArray(targetExams)) student.targetExams = targetExams;
-    if (body.primaryExamId && !student.targetExams.includes(body.primaryExamId)) {
-      student.targetExams.unshift(body.primaryExamId);
+    if (Array.isArray(targetExams) && targetExams.length > 0) {
+      student.targetExams = targetExams;
+    }
+    if (body.primaryExamId) {
+      student.primaryExamId = body.primaryExamId;
+      if (!student.targetExams.includes(body.primaryExamId)) {
+        student.targetExams.unshift(body.primaryExamId);
+      }
     }
     const dailyMinutes = body.dailyGoalMinutes ?? body.dailyTargetMinutes;
     if (typeof dailyMinutes === 'number') student.dailyGoalMinutes = dailyMinutes;
@@ -78,6 +75,16 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       student.settings = { ...(student.settings || {}), ...body.settings };
     }
 
+    // Backend authoritative computation of profile completion
+    student.isProfileComplete = Boolean(
+      student.firstName &&
+      (student.lastName || student.isSingleName) &&
+      student.phone &&
+      student.targetExams &&
+      student.targetExams.length > 0
+    );
+
+    student.lastActivityAt = new Date().toISOString();
     await db.students.set(student.id, student);
     return reply.send(formatStudentProfile(student));
   });
@@ -86,30 +93,19 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
    * POST /me/onboarding
    * Mobile onboarding preference persistence (F08)
    */
-  fastify.post('/me/onboarding', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Student token required' } });
-    }
-
-    const token = authHeader.substring(7);
-    const decoded = verifyJwt<{ sub: string }>(token);
-    if (!decoded?.sub) {
-      return reply.code(401).send({ success: false, error: { code: 'INVALID_TOKEN', message: 'Token invalid' } });
-    }
-
-    const student = db.students.get(decoded.sub);
-    if (!student) {
-      return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Student profile not found' } });
-    }
-
+  fastify.post('/me/onboarding', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
+    const student = request.student!.record;
     const body = request.body as any;
+
     const targetExams = body.selectedExamIds || body.targetExams;
-    if (Array.isArray(targetExams)) {
+    if (Array.isArray(targetExams) && targetExams.length > 0) {
       student.targetExams = targetExams;
     }
-    if (body.primaryExamId && !student.targetExams.includes(body.primaryExamId)) {
-      student.targetExams.unshift(body.primaryExamId);
+    if (body.primaryExamId) {
+      student.primaryExamId = body.primaryExamId;
+      if (!student.targetExams.includes(body.primaryExamId)) {
+        student.targetExams.unshift(body.primaryExamId);
+      }
     }
     if (body.preferredLanguage) {
       student.preferredLanguage = body.preferredLanguage;
@@ -122,6 +118,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       student.settings = { ...(student.settings || {}), ...body.settings };
     }
 
+    student.lastActivityAt = new Date().toISOString();
     await db.students.set(student.id, student);
     const formatted = formatStudentProfile(student);
     return reply.send({
@@ -159,48 +156,72 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * POST /me/delete
-   * Student account deletion request with tracking ticket
+   * Student account deletion (Durable persistence & session revocation)
    */
-  fastify.post('/me/delete', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    let studentId = 'stu_anon';
-    if (authHeader?.startsWith('Bearer ')) {
-      const decoded = verifyJwt<{ sub: string }>(authHeader.substring(7));
-      if (decoded?.sub) studentId = decoded.sub;
-    }
+  fastify.post('/me/delete', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
+    const student = request.student!.record;
+    student.status = 'DELETED';
+    student.tokenVersion = (student.tokenVersion || 1) + 1;
+    student.firstName = '[DELETED]';
+    student.lastName = '[DELETED]';
+    student.phone = undefined;
+    student.email = `deleted_${student.id}@sidprep.invalid`;
+    student.settings = {};
+    student.completedTasks = [];
+    await db.students.set(student.id, student);
+    await db.revokeStudentSessions(student.id);
+
     const requestId = `del_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    db.logOperational({
-      service: 'DATA_PRIVACY',
-      level: 'WARN',
-      message: `Account deletion ticket ${requestId} filed by student ${studentId}`,
-      meta: { studentId, requestId },
+    db.logAudit({
+      actorId: student.id,
+      actorEmail: student.email,
+      actorRole: 'STUDENT',
+      module: 'STUDENT_USER',
+      action: 'USER_SELF_DELETE',
+      targetId: student.id,
+      changesDiff: { action: 'SELF_DELETE' },
+      ipAddress: request.ip,
     });
+
     return reply.send({
       success: true,
       requestId,
-      status: 'PENDING_COMPLIANCE_VERIFICATION',
-      message: 'Deletion request registered per statutory guidelines. Account will be safely closed upon verification.',
+      status: 'DELETED',
+      message: 'Account and personal data have been durably deleted per data privacy policy.',
     });
   });
 
   /**
    * GET /home
-   * Student home dashboard (F29: dynamic student progress)
+   * Student home dashboard (Honest metrics from real student records)
    */
   fastify.get('/home', async (request, reply) => {
-    let student: any = null;
+    let student: StudentRecord | null = null;
     const authHeader = request.headers.authorization;
     if (authHeader?.startsWith('Bearer ')) {
-      const decoded = verifyJwt<{ sub: string }>(authHeader.substring(7));
+      const decoded = verifyJwt<{ sub: string; type?: string; tokenVersion?: number }>(authHeader.substring(7), { audience: 'sidprep:student_api' });
       if (decoded?.sub) {
-        student = db.students.get(decoded.sub);
+        const found = db.students.get(decoded.sub);
+        if (found) {
+          if (found.status === 'SUSPENDED') {
+            return reply.code(403).send({ success: false, error: { code: 'ACCOUNT_SUSPENDED', message: 'Account is suspended.' } });
+          }
+          if (found.status === 'DELETED') {
+            return reply.code(403).send({ success: false, error: { code: 'ACCOUNT_DELETED', message: 'Account is deleted.' } });
+          }
+          const curVer = found.tokenVersion || 1;
+          if (decoded.tokenVersion !== undefined && decoded.tokenVersion < curVer) {
+            return reply.code(401).send({ success: false, error: { code: 'TOKEN_REVOKED', message: 'Session revoked.' } });
+          }
+          student = found;
+        }
       }
     }
 
     let primaryExamRecord = null;
     if (student && student.targetExams && student.targetExams.length > 0) {
       primaryExamRecord = Array.from(db.exams.values()).find(
-        (e) => e.id === student.targetExams[0] || e.code.toLowerCase() === student.targetExams[0].toLowerCase()
+        (e) => e.id === student!.targetExams[0] || e.code.toLowerCase() === student!.targetExams[0].toLowerCase()
       );
     }
     if (!primaryExamRecord) {
@@ -216,18 +237,18 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       type: t.type === 'FULL' ? 'FULL_LENGTH' : t.type === 'PYQ' ? 'PYQ' : 'SECTIONAL',
     }));
 
-    // Dynamic calculations for student progress
-    let completedMinutes = 35;
-    let streakDays = 4;
-    let accuracyRate = 78.5;
+    // Dynamic calculations for student progress from actual records (no fake progress!)
+    let completedMinutes = 0;
+    let streakDays = 0;
+    let accuracyRate = 0;
     let activeAttempt: any = null;
-    let completedTasksCount = 2;
+    let completedTasksCount = 0;
 
     if (student) {
-      streakDays = student.streakDays || 1;
+      streakDays = student.streakDays || 0;
       completedTasksCount = (student.completedTasks || []).length;
 
-      const studentAttempts = Array.from(db.attempts.values()).filter((a) => a.studentId === student.id);
+      const studentAttempts = Array.from(db.attempts.values()).filter((a) => a.studentId === student!.id);
       const inProgress = studentAttempts.find(
         (a) => a.status === 'IN_PROGRESS' && (!a.expiresAt || new Date(a.expiresAt) > new Date())
       );
@@ -241,6 +262,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
           attemptId: inProgress.id,
           testId: inProgress.testId,
           testTitle: test?.title || 'Mock Test',
+          examTitle: primaryExamRecord?.title || primaryExamRecord?.name || 'Target Exam',
           startedAt: inProgress.startedAt,
           expiresAt: inProgress.expiresAt,
           durationSeconds: inProgress.durationSeconds,
@@ -253,7 +275,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         const totalAccuracy = submittedAttempts.reduce((acc, a) => acc + (a.accuracy || 0), 0);
         accuracyRate = Number((totalAccuracy / submittedAttempts.length).toFixed(1));
         
-        const totalSecs = submittedAttempts.reduce((acc, a) => acc + (a.durationSeconds || 0), 0);
+        const totalSecs = submittedAttempts.reduce((acc, a) => acc + (a.durationSeconds || a.timeSpentSeconds || 0), 0);
         completedMinutes = Math.round(totalSecs / 60);
       }
     }
@@ -261,17 +283,17 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     return reply.send({
       primaryExam: primaryExamRecord ? {
         id: primaryExamRecord.id,
-        body: primaryExamRecord.bodyCode,
+        body: (primaryExamRecord.body || primaryExamRecord.bodyCode || 'SSC') as any,
         code: primaryExamRecord.code,
-        title: primaryExamRecord.name,
+        title: primaryExamRecord.title || primaryExamRecord.name,
         description: primaryExamRecord.description,
-        currentStatus: 'EXAM_SCHEDULED',
-        officialExamDate: '2026-09-12T09:00:00Z',
-        isDateAnnounced: true,
-        verificationSourceUrl: primaryExamRecord.sourceUrl,
-        lastVerifiedAt: primaryExamRecord.verifiedDate,
+        currentStatus: primaryExamRecord.currentStatus || (primaryExamRecord.isDateAnnounced ? 'EXAM_SCHEDULED' : 'DATE_NOT_ANNOUNCED'),
+        officialExamDate: primaryExamRecord.isDateAnnounced ? (primaryExamRecord.officialExamDate || primaryExamRecord.verifiedDate || null) : null,
+        isDateAnnounced: Boolean(primaryExamRecord.isDateAnnounced),
+        verificationSourceUrl: primaryExamRecord.sourceUrl || null,
+        lastVerifiedAt: primaryExamRecord.verifiedDate || null,
         stagesCount: primaryExamRecord.stagesCount,
-        availableTestsCount: Array.from(db.tests.values()).filter((t) => t.examCode === primaryExamRecord.code).length || 24,
+        availableTestsCount: Array.from(db.tests.values()).filter((t) => t.examCode === primaryExamRecord.code).length,
       } : null,
       selectedExams: student?.targetExams || [],
       dailyGoal: {
@@ -286,7 +308,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
         completedTasks: completedTasksCount,
       },
       recommendedTests: recommended,
-      dailyAffairsCount: Array.from(db.newsDrafts.values()).filter((d) => d.editorialStatus === 'PUBLISHED').length || 2,
+      dailyAffairsCount: Array.from(db.newsDrafts.values()).filter((d) => d.editorialStatus === 'PUBLISHED').length || 0,
     });
   });
 
@@ -352,9 +374,9 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
     return reply.send({
       date: new Date().toISOString().split('T')[0],
-      dayStreak: student?.streakDays || 4,
+      dayStreak: student?.streakDays || 0,
       targetMinutes: student?.dailyGoalMinutes || 60,
-      completedMinutes: completedMinutes || (completedTasksList.length > 0 ? completedMinutes : 35),
+      completedMinutes: completedMinutes,
       missedTasksCount: 0,
       tasks: defaultTasks,
       weakTopicRecommendations: [
@@ -370,48 +392,48 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * PATCH /study-plan/tasks/:id
-   * Persist task completion status across devices (F29)
+   * Persist task completion status across devices (Strictly authenticated)
    */
-  fastify.patch('/study-plan/tasks/:id', async (request, reply) => {
+  fastify.patch('/study-plan/tasks/:id', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const { isCompleted = true } = (request.body as { isCompleted?: boolean }) || {};
+    const student = request.student!.record;
 
-    const authHeader = request.headers.authorization;
-    if (authHeader?.startsWith('Bearer ')) {
-      const decoded = verifyJwt<{ sub: string }>(authHeader.substring(7));
-      if (decoded?.sub) {
-        const student = db.students.get(decoded.sub);
-        if (student) {
-          if (!student.completedTasks) {
-            student.completedTasks = [];
-          }
-          if (isCompleted) {
-            if (!student.completedTasks.includes(id)) {
-              student.completedTasks.push(id);
-            }
-          } else {
-            student.completedTasks = student.completedTasks.filter((taskId) => taskId !== id);
-          }
-          await db.students.set(student.id, student);
-        }
-      }
+    if (!student.completedTasks) {
+      student.completedTasks = [];
     }
+    if (isCompleted) {
+      if (!student.completedTasks.includes(id)) {
+        student.completedTasks.push(id);
+      }
+    } else {
+      student.completedTasks = student.completedTasks.filter((taskId) => taskId !== id);
+    }
+    student.lastActivityAt = new Date().toISOString();
+    await db.students.set(student.id, student);
 
     return reply.send({
       success: true,
       taskId: id,
       isCompleted,
       syncedAt: new Date().toISOString(),
+      completedTasks: student.completedTasks,
+      completedTasksCount: student.completedTasks.length,
     });
   });
 
   /**
    * GET /admin/users
-   * Admin Student Directory with masked PII and filters
+   * Admin Student Directory with masked PII, filters, and audit trail
    */
   fastify.get('/admin/users', { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'SUPPORT', 'AUDITOR'])] }, async (request, reply) => {
-
-    const { query, status, exam } = request.query as { query?: string; status?: string; exam?: string };
+    const admin = request.admin!;
+    const { query, status, exam, unmask } = request.query as {
+      query?: string;
+      status?: string;
+      exam?: string;
+      unmask?: string;
+    };
 
     let students = Array.from(db.students.values());
 
@@ -420,29 +442,70 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     if (exam) {
-      students = students.filter((s) => s.targetExams.includes(exam));
+      const examLower = exam.toLowerCase();
+      students = students.filter(
+        (s) =>
+          s.targetExams?.some((e) => e.toLowerCase() === examLower) ||
+          s.primaryExamId?.toLowerCase() === examLower
+      );
     }
 
     if (query) {
-      const q = query.toLowerCase();
-      students = students.filter((s) => s.email.toLowerCase().includes(q));
+      const q = query.toLowerCase().trim();
+      students = students.filter((s) => {
+        const emailMatch = s.email.toLowerCase().includes(q);
+        const nameMatch = `${s.firstName || ''} ${s.lastName || ''}`.toLowerCase().includes(q);
+        const phoneMatch = s.phone ? s.phone.includes(q) : false;
+        const idMatch = s.id.toLowerCase().includes(q);
+        return emailMatch || nameMatch || phoneMatch || idMatch;
+      });
     }
 
-    // Return with masked PII unless SUPER_ADMIN explicitly requests full details
-    const masked = students.map((s) => ({
+    // Sort by registration date descending
+    students.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    const shouldUnmask = unmask === 'true' && admin.role === 'SUPER_ADMIN';
+
+    if (shouldUnmask) {
+      db.logAudit({
+        actorId: admin.sub,
+        actorEmail: admin.email,
+        actorRole: admin.role,
+        module: 'STUDENT_USER',
+        action: 'UNMASK_DIRECTORY_PII',
+        targetId: 'directory',
+        changesDiff: { query, status, exam },
+        ipAddress: request.ip,
+      });
+    }
+
+    const result = students.map((s) => ({
       id: s.id,
+      firstName: s.firstName || '',
+      lastName: s.lastName || '',
+      isSingleName: Boolean(s.isSingleName),
+      email: shouldUnmask ? s.email : undefined,
+      phone: shouldUnmask ? s.phone : undefined,
       emailMasked: s.email.replace(/(.{2})(.*)(@.*)/, '$1***$3'),
       phoneMasked: s.phone ? s.phone.replace(/(\d{2})(\d+)(\d{2})/, '$1******$3') : 'Not linked',
+      phoneCountryCode: s.phoneCountryCode || '+91',
       preferredLanguage: s.preferredLanguage,
-      targetExams: s.targetExams,
+      targetExams: s.targetExams || [],
+      primaryExamId: s.primaryExamId || s.targetExams?.[0] || 'ssc-cgl',
       dailyGoalMinutes: s.dailyGoalMinutes,
       streakDays: s.streakDays,
       status: s.status,
       isEmailVerified: s.isEmailVerified,
+      isProfileComplete: Boolean(s.isProfileComplete),
+      registrationIp: s.registrationIp || '127.0.0.1',
+      lastLoginIp: s.lastLoginIp || s.registrationIp || '127.0.0.1',
+      lastLoginAt: s.lastLoginAt || s.createdAt,
+      lastActivityAt: s.lastActivityAt || s.createdAt,
+      loginSource: s.loginSource || 'app',
       createdAt: s.createdAt,
     }));
 
-    return reply.send(masked);
+    return reply.send(result);
   });
 
   /**
@@ -467,11 +530,34 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Student account not found' } });
     }
 
-    if (action === 'SUSPEND') { student.status = 'SUSPENDED'; student.tokenVersion = (student.tokenVersion || 1) + 1; await db.students.set(id, student); }
-    if (action === 'ACTIVATE') { student.status = 'ACTIVE'; await db.students.set(id, student); }
-    if (action === 'DELETE_DATA') {
+    if (action === 'SUSPEND') {
+      student.status = 'SUSPENDED';
+      student.tokenVersion = (student.tokenVersion || 1) + 1;
+      await db.students.set(id, student);
+      await db.revokeStudentSessions(id);
+    } else if (action === 'ACTIVATE') {
+      student.status = 'ACTIVE';
+      await db.students.set(id, student);
+    } else if (action === 'REVOKE_SESSIONS') {
+      student.tokenVersion = (student.tokenVersion || 1) + 1;
+      await db.students.set(id, student);
+      await db.revokeStudentSessions(id);
+    } else if (action === 'DELETE_DATA') {
       student.status = 'DELETED';
+      student.tokenVersion = (student.tokenVersion || 1) + 1;
+      student.firstName = '[DELETED]';
+      student.lastName = '[DELETED]';
+      student.phone = undefined;
       student.email = `deleted_${student.id}@sidprep.invalid`;
+      student.settings = {};
+      student.completedTasks = [];
+      await db.students.set(id, student);
+      await db.revokeStudentSessions(id);
+    } else {
+      return reply.code(400).send({
+        success: false,
+        error: { code: 'INVALID_ACTION', message: `Unsupported account action: ${action}` },
+      });
     }
 
     db.logAudit({

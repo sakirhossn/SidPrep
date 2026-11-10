@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { db, AttemptRecord } from '../../db/index.js';
-import { verifyJwt } from '../../lib/security.js';
 import { OfflineSyncBatchSchema } from '@sidprep/contracts';
+import { requireStudentAuth } from '../../lib/studentAuth.js';
 
 export const testRoutes: FastifyPluginAsync = async (fastify) => {
   /**
@@ -77,35 +77,11 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
    * Helper: Start or Resume attempt logic
    */
   const startAttemptHandler = async (testId: string, request: any, reply: any) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Student authentication token required to start attempt.' },
-      });
-    }
-
-    const token = authHeader.substring(7);
-    const decoded = verifyJwt<{ sub: string; type?: string; tokenVersion?: number }>(token);
-    if (!decoded?.sub || (decoded.type && decoded.type !== 'student')) {
+    const student = request.student?.record || db.students.get(request.student?.id);
+    if (!student) {
       return reply.code(401).send({
         success: false,
         error: { code: 'UNAUTHORIZED', message: 'Valid student session required.' },
-      });
-    }
-
-    const student = db.students.get(decoded.sub);
-    if (!student || student.status !== 'ACTIVE') {
-      return reply.code(403).send({
-        success: false,
-        error: { code: 'FORBIDDEN', message: 'Student account is not active or has been suspended.' },
-      });
-    }
-
-    if (student.tokenVersion !== undefined && decoded.tokenVersion !== undefined && decoded.tokenVersion < student.tokenVersion) {
-      return reply.code(401).send({
-        success: false,
-        error: { code: 'SESSION_REVOKED', message: 'Session has been revoked.' },
       });
     }
 
@@ -248,7 +224,7 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
    * POST /attempts
    * Start a new test attempt via testId in body
    */
-  fastify.post('/attempts', async (request, reply) => {
+  fastify.post('/attempts', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
     const { testId } = (request.body as { testId?: string }) || {};
     if (!testId) {
       return reply.code(400).send({ success: false, error: { code: 'INVALID_INPUT', message: 'testId is required' } });
@@ -260,7 +236,7 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
    * POST /tests/:id/start
    * Start attempt via route parameter (OpenAPI alias)
    */
-  fastify.post('/tests/:id/start', async (request, reply) => {
+  fastify.post('/tests/:id/start', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     return startAttemptHandler(id, request, reply);
   });
@@ -269,28 +245,14 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
    * GET /attempts/:id
    * Get attempt status and details
    */
-  fastify.get('/attempts/:id', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Student authentication required.' } });
-    }
-    const token = authHeader.substring(7);
-    const decoded = verifyJwt<{ sub: string; type?: string }>(token);
-    if (!decoded?.sub || (decoded.type && decoded.type !== 'student')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Valid student session required.' } });
-    }
-    const student = db.students.get(decoded.sub);
-    if (!student || student.status !== 'ACTIVE') {
-      return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Student account is not active.' } });
-    }
-
+  fastify.get('/attempts/:id', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const attempt = db.attempts.get(id);
     if (!attempt) {
       return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Attempt not found' } });
     }
 
-    if (attempt.studentId !== student.id) {
+    if (attempt.studentId !== request.student!.id) {
       return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Access denied to this attempt.' } });
     }
 
@@ -321,28 +283,14 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
    * GET /attempts/:id/result
    * Retrieve authoritative attempt result and breakdown (F10)
    */
-  fastify.get('/attempts/:id/result', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Student authentication required.' } });
-    }
-    const token = authHeader.substring(7);
-    const decoded = verifyJwt<{ sub: string; type?: string }>(token);
-    if (!decoded?.sub || (decoded.type && decoded.type !== 'student')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Valid student session required.' } });
-    }
-    const student = db.students.get(decoded.sub);
-    if (!student || student.status !== 'ACTIVE') {
-      return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Student account is not active.' } });
-    }
-
+  fastify.get('/attempts/:id/result', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const attempt = db.attempts.get(id);
     if (!attempt) {
       return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Attempt not found' } });
     }
 
-    if (attempt.studentId !== student.id) {
+    if (attempt.studentId !== request.student!.id) {
       return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Access denied to this attempt result.' } });
     }
 
@@ -393,21 +341,7 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
    * POST /attempts/:id/submit
    * Authoritative submission & scoring
    */
-  fastify.post('/attempts/:id/submit', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Student authentication required.' } });
-    }
-    const token = authHeader.substring(7);
-    const decoded = verifyJwt<{ sub: string; type?: string; tokenVersion?: number }>(token);
-    if (!decoded?.sub || (decoded.type && decoded.type !== 'student')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Valid student session required.' } });
-    }
-    const student = db.students.get(decoded.sub);
-    if (!student || student.status !== 'ACTIVE') {
-      return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Student account is not active or has been suspended.' } });
-    }
-
+  fastify.post('/attempts/:id/submit', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const attempt = db.attempts.get(id);
 
@@ -416,7 +350,7 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     // Invariant F06: Ownership boundary check
-    if (attempt.studentId !== student.id) {
+    if (attempt.studentId !== request.student!.id) {
       return reply.code(403).send({
         success: false,
         error: { code: 'FORBIDDEN', message: 'You are not authorized to submit this test attempt.' },
@@ -615,24 +549,9 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
-   * POST /sync/answers
-   * Monotonic offline answer synchronization with deadline enforcement (F14, F23)
+   * Helper: sync answers logic for /sync/answers and /sync/batch
    */
-  fastify.post('/sync/answers', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Student authentication required.' } });
-    }
-    const token = authHeader.substring(7);
-    const decoded = verifyJwt<{ sub: string; type?: string; tokenVersion?: number }>(token);
-    if (!decoded?.sub || (decoded.type && decoded.type !== 'student')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Valid student session required.' } });
-    }
-    const student = db.students.get(decoded.sub);
-    if (!student || student.status !== 'ACTIVE') {
-      return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Student account is not active or has been suspended.' } });
-    }
-
+  const syncAnswersHandler = async (request: any, reply: any) => {
     const parse = OfflineSyncBatchSchema.safeParse(request.body);
     if (!parse.success) {
       return reply.code(400).send({ success: false, error: { code: 'INVALID_SYNC_PAYLOAD', details: parse.error.format() } });
@@ -647,7 +566,7 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     // Invariant F06: Ownership boundary check
-    if (attempt.studentId !== student.id) {
+    if (attempt.studentId !== request.student!.id) {
       return reply.code(403).send({
         success: false,
         error: { code: 'FORBIDDEN', message: 'You are not authorized to sync answers for this test attempt.' },
@@ -717,5 +636,12 @@ export const testRoutes: FastifyPluginAsync = async (fastify) => {
       remainingSeconds,
       pendingSequence: 0,
     });
-  });
+  };
+
+  /**
+   * POST /sync/answers & POST /sync/batch
+   * Monotonic offline answer synchronization with deadline enforcement (F14, F23)
+   */
+  fastify.post('/sync/answers', { preHandler: [requireStudentAuth()] }, syncAnswersHandler);
+  fastify.post('/sync/batch', { preHandler: [requireStudentAuth()] }, syncAnswersHandler);
 };

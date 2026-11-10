@@ -18,6 +18,7 @@ import {
 } from '../../lib/security.js';
 import { env } from '../../config/index.js';
 import { sendStudentOtpEmail, sendAdminOtpEmail, sendAdminCredentialsEmail } from '../../lib/email.js';
+import { requireStudentAuth } from '../../lib/studentAuth.js';
 import {
   StudentOtpChallengeSchema,
   StudentOtpVerifySchema,
@@ -32,18 +33,107 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
   const handleStudentChallenge = async (request: any, reply: any) => {
     const parse = StudentOtpChallengeSchema.safeParse(request.body);
     if (!parse.success) {
-      return reply.code(400).send({ success: false, error: { code: 'INVALID_INPUT', message: 'Valid email is required' } });
+      return reply.code(400).send({
+        success: false,
+        error: { code: 'INVALID_INPUT', message: 'Valid email is required', details: parse.error.format() }
+      });
     }
 
-    const { email } = parse.data;
+    const { email, registrationDraft } = parse.data as any;
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Check if mode is 'register' or user specifically requested registration
+    const isRegisterMode = request.body?.mode === 'register' || Boolean(registrationDraft);
+
+    // Validate registration draft if provided
+    if (registrationDraft) {
+      const { firstName, lastName, isSingleName, phone, targetExamIds, primaryExamId } = registrationDraft;
+
+      if (!firstName || !firstName.trim()) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'INVALID_REGISTRATION_DRAFT', message: 'First name is required.' }
+        });
+      }
+
+      if (!isSingleName && (!lastName || !lastName.trim())) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'INVALID_REGISTRATION_DRAFT', message: 'Last name is required unless single-name option is selected.' }
+        });
+      }
+
+      if (!phone || !phone.trim() || phone.trim().length < 5) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'INVALID_REGISTRATION_DRAFT', message: 'A valid phone number is required.' }
+        });
+      }
+
+      if (!targetExamIds || !Array.isArray(targetExamIds) || targetExamIds.length === 0) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'INVALID_REGISTRATION_DRAFT', message: 'At least one target preparation exam must be selected.' }
+        });
+      }
+
+      // Verify selected exams exist in catalogue and are active
+      for (const examId of targetExamIds) {
+        const exam = db.exams.get(examId.toLowerCase()) || Array.from(db.exams.values()).find(e => e.code.toLowerCase() === examId.toLowerCase());
+        if (!exam || exam.isActive === false) {
+          return reply.code(400).send({
+            success: false,
+            error: { code: 'INVALID_EXAM_SELECTION', message: `Target exam ${examId} is invalid or inactive in the catalogue.` }
+          });
+        }
+      }
+
+      if (primaryExamId && !targetExamIds.includes(primaryExamId)) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'INVALID_REGISTRATION_DRAFT', message: 'Primary exam must be one of the selected target exams.' }
+        });
+      }
+    }
+
+    const existingStudent = Array.from(db.students.values()).find(
+      (s) => s.email.toLowerCase() === normalizedEmail
+    );
+
+    if (isRegisterMode && existingStudent && existingStudent.status !== 'DELETED') {
+      return reply.code(409).send({
+        success: false,
+        error: {
+          code: 'ACCOUNT_EXISTS',
+          message: 'An account with this email address already exists. Please log in instead.'
+        }
+      });
+    }
+
+    // Cooldown check: prevent spamming resend within 30 seconds
+    const existingChallenge = db.otpChallenges.get(normalizedEmail);
+    if (existingChallenge && existingChallenge.lastSentAt) {
+      const elapsed = Date.now() - existingChallenge.lastSentAt;
+      if (elapsed < 30000) {
+        const remaining = Math.ceil((30000 - elapsed) / 1000);
+        return reply.code(429).send({
+          success: false,
+          error: {
+            code: 'RESEND_COOLDOWN',
+            message: `Please wait ${remaining} seconds before requesting a new verification code.`
+          },
+          resendAvailableInSeconds: remaining
+        });
+      }
+    }
 
     // Check Brevo Daily Quota
     if (db.brevoSendsToday >= env.BREVO_DAILY_QUOTA_LIMIT) {
       db.logOperational({
         service: 'BREVO',
         level: 'ERROR',
-        message: 'Daily Brevo email limit reached (300/day). Cannot dispatch OTP.',
-        meta: { email, currentUsage: db.brevoSendsToday },
+        message: 'Daily Brevo email limit reached. Cannot dispatch OTP.',
+        meta: { email: normalizedEmail, currentUsage: db.brevoSendsToday },
       });
       return reply.code(429).send({
         success: false,
@@ -58,35 +148,46 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
 
     // Store SHA-256 hash (F22)
-    db.otpChallenges.set(email.toLowerCase(), {
+    db.otpChallenges.set(normalizedEmail, {
       otpHash: hashOtp(otp),
       expiresAt,
       attempts: 0,
+      lastSentAt: Date.now(),
       devOtp: env.NODE_ENV !== 'production' ? otp : undefined,
+      registrationDraft: registrationDraft || existingChallenge?.registrationDraft,
     });
 
     // Increment quota usage
     db.brevoSendsToday++;
 
-    // Dispatch real email via Brevo SMTP relay
+    // Dispatch email via Brevo SMTP relay
     try {
-      await sendStudentOtpEmail(email, otp);
+      await sendStudentOtpEmail(normalizedEmail, otp);
     } catch (err: any) {
-      console.error(`[Auth] Failed to dispatch student OTP email to ${email}:`, err.message);
+      console.error(`[Auth] Failed to dispatch student OTP email to ${normalizedEmail}:`, err.message);
+      if (env.NODE_ENV === 'production') {
+        return reply.code(502).send({
+          success: false,
+          error: {
+            code: 'EMAIL_DISPATCH_FAILED',
+            message: 'Failed to deliver verification code. Please check your email address or retry later.'
+          }
+        });
+      }
     }
 
     db.logOperational({
       service: 'BREVO',
       level: 'INFO',
-      message: `Dispatched student OTP email to ${email.replace(/(.{2})(.*)(@.*)/, '$1***$3')}`,
+      message: `Dispatched student OTP email to ${normalizedEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3')}`,
       meta: { quotaUsed: db.brevoSendsToday, quotaLimit: env.BREVO_DAILY_QUOTA_LIMIT },
     });
 
-    // Enumeration-resistant response
     return reply.send({
       success: true,
-      message: 'If an account exists or is eligible, a one-time verification code has been sent.',
+      message: 'A one-time verification code has been sent to your email address.',
       expiresAtSeconds: 600,
+      resendAvailableInSeconds: 30,
       devOtpHint: env.NODE_ENV !== 'production' ? otp : undefined,
     });
   };
@@ -100,21 +201,22 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ success: false, error: { code: 'INVALID_INPUT', message: 'Valid email and 6-digit OTP required' } });
     }
 
-    const { email, otp } = parse.data;
-    const challenge = db.otpChallenges.get(email.toLowerCase());
+    const { email, otp, registrationDraft, deviceInfo } = parse.data as any;
+    const normalizedEmail = email.trim().toLowerCase();
+    const challenge = db.otpChallenges.get(normalizedEmail);
 
     if (!challenge) {
       return reply.code(401).send({ success: false, error: { code: 'INVALID_OTP', message: 'No pending challenge found or OTP expired' } });
     }
 
     if (Date.now() > challenge.expiresAt) {
-      db.otpChallenges.delete(email.toLowerCase());
+      db.otpChallenges.delete(normalizedEmail);
       return reply.code(401).send({ success: false, error: { code: 'OTP_EXPIRED', message: 'The verification code has expired' } });
     }
 
     // Strict bounded attempt ceiling (F04, F22)
     if (challenge.attempts >= 5) {
-      db.otpChallenges.delete(email.toLowerCase());
+      db.otpChallenges.delete(normalizedEmail);
       return reply.code(429).send({ success: false, error: { code: 'TOO_MANY_ATTEMPTS', message: 'Maximum verification attempts exceeded. Please request a new code.' } });
     }
 
@@ -123,40 +225,139 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       (env.NODE_ENV !== 'production' && challenge.devOtp === otp);
 
     if (!isMatch) {
-      await db.otpChallenges.incrementAttempts(email.toLowerCase());
+      await db.otpChallenges.incrementAttempts(normalizedEmail);
       return reply.code(401).send({ success: false, error: { code: 'INVALID_OTP', message: 'Incorrect verification code' } });
     }
 
+    // Retrieve draft details
+    const draft = challenge.registrationDraft || registrationDraft;
+
     // OTP verified: consume challenge
-    db.otpChallenges.delete(email.toLowerCase());
+    db.otpChallenges.delete(normalizedEmail);
 
     // Find or create student
-    let student = Array.from(db.students.values()).find((s) => s.email.toLowerCase() === email.toLowerCase());
+    let student = Array.from(db.students.values()).find((s) => s.email.toLowerCase() === normalizedEmail);
+    const clientIp = request.ip || '127.0.0.1';
+    const loginSource: 'app' | 'web' = deviceInfo?.platform === 'web' ? 'web' : 'app';
+    const nowIso = new Date().toISOString();
+
     if (student) {
       // Invariant F07: Suspended/deleted accounts cannot verify or log in
+      if (student.status === 'SUSPENDED') {
+        return reply.code(403).send({
+          success: false,
+          error: { code: 'ACCOUNT_SUSPENDED', message: 'Your student account has been suspended by an administrator. Please contact support.' },
+        });
+      }
+      if (student.status === 'DELETED') {
+        return reply.code(403).send({
+          success: false,
+          error: { code: 'ACCOUNT_DELETED', message: 'This student account has been deleted.' },
+        });
+      }
       if (student.status !== 'ACTIVE') {
         return reply.code(403).send({
           success: false,
-          error: { code: 'FORBIDDEN', message: 'Student account is suspended or inactive.' },
+          error: { code: 'ACCOUNT_INACTIVE', message: 'Student account is inactive.' },
         });
       }
+
+      // Update login IP and history
+      student.lastLoginIp = clientIp;
+      student.lastLoginAt = nowIso;
+      student.lastActivityAt = nowIso;
+      student.loginSource = loginSource;
+
+      // If existing profile was incomplete, complete it from draft
+      if (!student.isProfileComplete && draft) {
+        student.firstName = draft.firstName?.trim() || student.firstName;
+        student.lastName = draft.isSingleName ? '' : (draft.lastName?.trim() || student.lastName);
+        student.isSingleName = Boolean(draft.isSingleName);
+        student.phoneCountryCode = draft.phoneCountryCode || student.phoneCountryCode || '+91';
+        student.phone = draft.phone?.trim() || student.phone;
+        if (draft.targetExamIds && draft.targetExamIds.length > 0) {
+          student.targetExams = draft.targetExamIds;
+        }
+        if (draft.primaryExamId) {
+          student.primaryExamId = draft.primaryExamId;
+        }
+      }
+
+      // Authoritative profile completion calculation
+      student.isProfileComplete = Boolean(
+        student.firstName &&
+        student.firstName.trim().length > 0 &&
+        (student.isSingleName || (student.lastName && student.lastName.trim().length > 0)) &&
+        student.phone &&
+        student.phone.trim().length > 0 &&
+        student.targetExams &&
+        student.targetExams.length > 0
+      );
+
+      await db.students.set(student.id, student);
     } else {
+      // Create new student
+      const studentId = `stu_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      const targetExams = draft?.targetExamIds || ['ssc-cgl'];
+      const primaryExamId = draft?.primaryExamId || targetExams[0] || 'ssc-cgl';
+
       student = {
-        id: `stu_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        email: email.toLowerCase(),
-        preferredLanguage: 'en',
-        targetExams: ['SSC_CGL'],
+        id: studentId,
+        email: normalizedEmail,
+        firstName: draft?.firstName?.trim() || '',
+        lastName: draft?.isSingleName ? '' : (draft?.lastName?.trim() || ''),
+        isSingleName: Boolean(draft?.isSingleName),
+        phoneCountryCode: draft?.phoneCountryCode || '+91',
+        phone: draft?.phone?.trim() || undefined,
+        isPhoneVerified: false,
+        preferredLanguage: draft?.preferredLanguage || 'en',
+        targetExams,
+        primaryExamId,
         dailyGoalMinutes: 45,
-        streakDays: 1,
+        streakDays: 0,
         status: 'ACTIVE',
         isEmailVerified: true,
         tokenVersion: 1,
-        createdAt: new Date().toISOString(),
+        registrationIp: clientIp,
+        lastLoginIp: clientIp,
+        lastLoginAt: nowIso,
+        lastActivityAt: nowIso,
+        loginSource,
+        createdAt: nowIso,
       };
+
+      // Authoritative profile completion calculation
+      student.isProfileComplete = Boolean(
+        student.firstName &&
+        student.firstName.trim().length > 0 &&
+        (student.isSingleName || (student.lastName && student.lastName.trim().length > 0)) &&
+        student.phone &&
+        student.phone.trim().length > 0 &&
+        student.targetExams &&
+        student.targetExams.length > 0
+      );
+
       await db.students.set(student.id, student);
     }
 
     const tokenVersion = student.tokenVersion || 1;
+
+    // Record session and login history
+    await db.createStudentSession({
+      studentId: student.id,
+      tokenVersion,
+      ipAddress: clientIp,
+      userAgent: request.headers['user-agent'],
+      loginSource,
+      deviceInfo,
+    });
+    await db.recordStudentLogin({
+      studentId: student.id,
+      ipAddress: clientIp,
+      userAgent: request.headers['user-agent'],
+      loginSource,
+    });
+
     const accessToken = signJwt(
       { sub: student.id, email: student.email, type: 'student', tokenVersion },
       '1h',
@@ -177,7 +378,22 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
         expiresIn: 3600,
       },
       expiresIn: 3600,
-      user: student,
+      user: {
+        id: student.id,
+        email: student.email,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        isSingleName: student.isSingleName,
+        phone: student.phone,
+        phoneCountryCode: student.phoneCountryCode,
+        isPhoneVerified: student.isPhoneVerified,
+        isProfileComplete: student.isProfileComplete,
+        isNewUser: !challenge.registrationDraft && student.createdAt === nowIso,
+        selectedExamIds: student.targetExams,
+        targetExams: student.targetExams,
+        primaryExamId: student.primaryExamId || student.targetExams?.[0],
+        preferredLanguage: student.preferredLanguage,
+      },
     });
   };
 
@@ -187,6 +403,22 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post('/auth/student/verify', handleStudentVerify);
   fastify.post('/auth/otp/verify', handleStudentVerify);
+
+  /**
+   * POST /auth/logout
+   * Revoke student sessions and increment tokenVersion
+   */
+  fastify.post('/auth/logout', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
+    const student = request.student!.record;
+    student.tokenVersion = (student.tokenVersion || 1) + 1;
+    await db.students.set(student.id, student);
+    await db.revokeStudentSessions(student.id);
+
+    return reply.send({
+      success: true,
+      message: 'Logged out successfully and all sessions revoked.',
+    });
+  });
 
   /**
    * POST /auth/refresh

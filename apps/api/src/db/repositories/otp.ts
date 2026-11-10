@@ -7,6 +7,7 @@ export interface OtpChallenge {
   attempts: number;
   lastSentAt?: number;
   devOtp?: string; // Only populated in non-production for testing
+  registrationDraft?: any;
 }
 
 export class OtpChallengeRepository {

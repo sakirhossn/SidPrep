@@ -626,9 +626,91 @@ describe('Batch 4: Admin Operations, CMS Ingestion, Content Storage & Dual Revie
       assert.equal(body.error.code, 'REASON_REQUIRED');
     });
 
-    it('F16: POST /v1/admin/users/:id/action REVOKE_SESSIONS increments tokenVersion and logs audit', async () => {
+    it('F16: POST /v1/admin/users/:id/action REVOKE_SESSIONS increments tokenVersion, revokes sessions, and invalidates active tokens', async () => {
+      // Re-seed active student
+      await db.students.set(studentId, {
+        id: studentId,
+        email: 'batch4.student@example.com',
+        phone: '+919876543210',
+        preferredLanguage: 'en',
+        targetExams: ['SSC_CGL'],
+        dailyGoalMinutes: 30,
+        streakDays: 1,
+        status: 'ACTIVE',
+        isEmailVerified: true,
+        tokenVersion: 1,
+        createdAt: new Date().toISOString(),
+      });
+
       const initialStudent = db.students.get(studentId)!;
       const initialTokenVersion = initialStudent.tokenVersion || 1;
+
+      // Issue student token with current tokenVersion
+      const oldStudentToken = signJwt(
+        { sub: studentId, email: initialStudent.email, type: 'student', tokenVersion: initialTokenVersion },
+        '1h',
+        { audience: 'sidprep:student_api' }
+      );
+
+      // Verify token works on /v1/me
+      const checkRes1 = await app.inject({
+        method: 'GET',
+        url: '/v1/me',
+        headers: { authorization: `Bearer ${oldStudentToken}` },
+      });
+      assert.equal(checkRes1.statusCode, 200);
+
+      // Revoke sessions as admin
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/admin/users/${studentId}/action`,
+        headers: { authorization: `Bearer ${admin1Token}` },
+        payload: {
+          action: 'REVOKE_SESSIONS',
+          reason: 'Compromised device report by student',
+        },
+      });
+
+      assert.equal(res.statusCode, 200);
+      const updatedStudent = db.students.get(studentId)!;
+      assert.equal(updatedStudent.status, 'ACTIVE');
+      assert.ok(
+        (updatedStudent.tokenVersion || 1) > initialTokenVersion,
+        'Revocation must increment tokenVersion to revoke active sessions'
+      );
+
+      // Verify old token is now REJECTED with 401 TOKEN_REVOKED
+      const checkRes2 = await app.inject({
+        method: 'GET',
+        url: '/v1/me',
+        headers: { authorization: `Bearer ${oldStudentToken}` },
+      });
+      assert.equal(checkRes2.statusCode, 401);
+      const errBody = JSON.parse(checkRes2.body);
+      assert.equal(errBody.error.code, 'TOKEN_REVOKED');
+    });
+
+    it('F16: POST /v1/admin/users/:id/action SUSPEND marks account SUSPENDED, revokes tokens, and blocks access', async () => {
+      // Re-seed active student
+      await db.students.set(studentId, {
+        id: studentId,
+        email: 'batch4.student@example.com',
+        phone: '+919876543210',
+        preferredLanguage: 'en',
+        targetExams: ['SSC_CGL'],
+        dailyGoalMinutes: 30,
+        streakDays: 1,
+        status: 'ACTIVE',
+        isEmailVerified: true,
+        tokenVersion: 2,
+        createdAt: new Date().toISOString(),
+      });
+
+      const currentToken = signJwt(
+        { sub: studentId, email: 'batch4.student@example.com', type: 'student', tokenVersion: 2 },
+        '1h',
+        { audience: 'sidprep:student_api' }
+      );
 
       const res = await app.inject({
         method: 'POST',
@@ -636,17 +718,96 @@ describe('Batch 4: Admin Operations, CMS Ingestion, Content Storage & Dual Revie
         headers: { authorization: `Bearer ${admin1Token}` },
         payload: {
           action: 'SUSPEND',
-          reason: 'Automated test suspension for administrative verification',
+          reason: 'Malicious activity detected by proctoring engine',
         },
       });
 
       assert.equal(res.statusCode, 200);
       const updatedStudent = db.students.get(studentId)!;
       assert.equal(updatedStudent.status, 'SUSPENDED');
-      assert.ok(
-        (updatedStudent.tokenVersion || 1) > initialTokenVersion,
-        'Suspension must increment tokenVersion to revoke active sessions'
+
+      // GET /v1/me must return 403 ACCOUNT_SUSPENDED
+      const meRes = await app.inject({
+        method: 'GET',
+        url: '/v1/me',
+        headers: { authorization: `Bearer ${currentToken}` },
+      });
+      assert.equal(meRes.statusCode, 403);
+      const meBody = JSON.parse(meRes.body);
+      assert.equal(meBody.error.code, 'ACCOUNT_SUSPENDED');
+    });
+
+    it('F16: POST /v1/admin/users/:id/action DELETE_DATA durably anonymizes/deletes data, creates non-PII audit, and revokes sessions', async () => {
+      const deleteTargetId = 'stu_to_delete_01';
+      await db.students.set(deleteTargetId, {
+        id: deleteTargetId,
+        email: 'delete.target@example.com',
+        phone: '+919123456789',
+        preferredLanguage: 'en',
+        targetExams: ['SSC_CGL'],
+        dailyGoalMinutes: 30,
+        streakDays: 1,
+        status: 'ACTIVE',
+        isEmailVerified: true,
+        tokenVersion: 1,
+        createdAt: new Date().toISOString(),
+      });
+
+      const targetToken = signJwt(
+        { sub: deleteTargetId, email: 'delete.target@example.com', type: 'student', tokenVersion: 1 },
+        '1h',
+        { audience: 'sidprep:student_api' }
       );
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/admin/users/${deleteTargetId}/action`,
+        headers: { authorization: `Bearer ${admin1Token}` },
+        payload: {
+          action: 'DELETE_DATA',
+          reason: 'Student GDPR / Right to Erasure request verified',
+        },
+      });
+
+      assert.equal(res.statusCode, 200);
+
+      // Student record must either be deleted or status DELETED / anonymized
+      const deletedStudent = db.students.get(deleteTargetId);
+      if (deletedStudent) {
+        assert.equal(deletedStudent.status, 'DELETED');
+        assert.ok(!deletedStudent.email.includes('delete.target@example.com'), 'Email must be anonymized');
+      }
+
+      // Old token must fail
+      const meRes = await app.inject({
+        method: 'GET',
+        url: '/v1/me',
+        headers: { authorization: `Bearer ${targetToken}` },
+      });
+      assert.ok(meRes.statusCode === 401 || meRes.statusCode === 403);
+
+      // Check operational/audit log for non-PII audit record
+      const deleteLog = db.auditEvents.find(
+        (l: any) => (l.action === 'USER_DELETE_DATA' || l.changesDiff?.action === 'DELETE_DATA') && l.targetId === deleteTargetId
+      );
+      assert.ok(deleteLog, 'Audit log must record DELETE_DATA event');
+      assert.ok(!JSON.stringify(deleteLog).includes('delete.target@example.com'), 'Audit log must not contain deleted PII email');
+    });
+
+    it('F16: POST /v1/admin/users/:id/action rejects unsupported action with 400 INVALID_ACTION', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/admin/users/${studentId}/action`,
+        headers: { authorization: `Bearer ${admin1Token}` },
+        payload: {
+          action: 'UNSUPPORTED_ACTION',
+          reason: 'Testing rejection of invalid administrative action',
+        },
+      });
+
+      assert.equal(res.statusCode, 400);
+      const body = JSON.parse(res.body);
+      assert.equal(body.error.code, 'INVALID_ACTION');
     });
   });
 

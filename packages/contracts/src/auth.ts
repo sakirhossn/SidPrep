@@ -1,8 +1,22 @@
 import { z } from 'zod';
 
+export const StudentRegistrationDraftSchema = z.object({
+  firstName: z.string().min(1, 'First name is required').trim(),
+  lastName: z.string().trim().optional(),
+  isSingleName: z.boolean().default(false),
+  email: z.string().email('Valid email is required').trim().toLowerCase(),
+  phoneCountryCode: z.string().regex(/^\+[1-9]\d{0,3}$/, 'Valid country code required (e.g. +91)').default('+91'),
+  phone: z.string().min(5, 'Valid phone number required').max(15).trim(),
+  targetExamIds: z.array(z.string()).min(1, 'At least one target exam must be selected'),
+  primaryExamId: z.string().min(1, 'Primary target exam is required'),
+  preferredLanguage: z.enum(['en', 'hi', 'bn']).default('en'),
+});
+export type StudentRegistrationDraft = z.infer<typeof StudentRegistrationDraftSchema>;
+
 export const RequestOtpRequestSchema = z.object({
-  email: z.string().email(),
-  phone: z.string().optional()
+  email: z.string().email().trim().toLowerCase(),
+  phone: z.string().optional(),
+  registrationDraft: StudentRegistrationDraftSchema.optional(),
 });
 export type RequestOtpRequest = z.infer<typeof RequestOtpRequestSchema>;
 
@@ -15,12 +29,13 @@ export const RequestOtpResponseSchema = z.object({
 export type RequestOtpResponse = z.infer<typeof RequestOtpResponseSchema>;
 
 export const VerifyOtpRequestSchema = z.object({
-  email: z.string().email(),
-  otp: z.string().length(6),
+  email: z.string().email().trim().toLowerCase(),
+  otp: z.string().length(6).trim(),
+  registrationDraft: StudentRegistrationDraftSchema.optional(),
   deviceInfo: z.object({
-    platform: z.enum(['android', 'ios', 'web']),
+    platform: z.enum(['android', 'ios', 'web']).optional(),
     deviceName: z.string().optional(),
-    appVersion: z.string()
+    appVersion: z.string().optional()
   }).optional()
 });
 export type VerifyOtpRequest = z.infer<typeof VerifyOtpRequestSchema>;

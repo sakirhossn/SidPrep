@@ -20,9 +20,13 @@ function RootNavigation() {
           contentStyle: { backgroundColor: theme.background }
         }}
       >
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="(auth)/onboarding" options={{ headerShown: false }} />
+        <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="(auth)/intro" options={{ headerShown: false }} />
+        <Stack.Screen name="(auth)/account-options" options={{ headerShown: false }} />
+        <Stack.Screen name="(auth)/register" options={{ headerShown: false }} />
         <Stack.Screen name="(auth)/login" options={{ headerShown: false }} />
+        <Stack.Screen name="(auth)/onboarding" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="exam/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="mock/[id]/index" options={{ headerShown: false }} />
         <Stack.Screen name="mock/[id]/runner" options={{ headerShown: false, gestureEnabled: false }} />

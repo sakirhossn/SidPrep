@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Bell, BookMarked, Play, CheckCircle2, ArrowRight, FolderKanban } from 'lucide-react-native';
+import { Bell, BookMarked, Play, CheckCircle2, ArrowRight } from 'lucide-react-native';
 import { HomeDashboardResponse } from '@sidprep/contracts';
 import { api } from '../../src/api/client';
 import { sqliteDb } from '../../src/services/sqliteDatabase';
@@ -12,63 +12,53 @@ import { ExamCountdownCard } from '../../src/components/ExamCountdownCard';
 
 const CACHE_KEY_HOME = 'cache_home_dashboard';
 
-const DEFAULT_HOME_DASHBOARD: HomeDashboardResponse = {
+const ZERO_STATE_DASHBOARD: HomeDashboardResponse = {
   primaryExam: {
     id: 'ssc-cgl',
     body: 'SSC',
     code: 'SSC_CGL',
     title: 'Staff Selection Commission - Combined Graduate Level (SSC CGL)',
-    description: 'Premier recruitment exam for Group B & C gazetted and non-gazetted officers.',
-    currentStatus: 'EXAM_SCHEDULED',
-    officialExamDate: '2026-09-12T09:00:00Z',
-    isDateAnnounced: true,
+    description: 'Premier recruitment exam for Group B & C posts.',
+    currentStatus: 'DATE_NOT_ANNOUNCED',
+    officialExamDate: null as any,
+    isDateAnnounced: false,
     verificationSourceUrl: 'https://ssc.gov.in',
-    lastVerifiedAt: '2026-03-01T00:00:00Z',
+    lastVerifiedAt: new Date().toISOString(),
     stagesCount: 2,
-    availableTestsCount: 24
+    availableTestsCount: 0,
   },
   selectedExams: [],
   dailyGoal: {
     targetMinutes: 60,
-    completedMinutes: 35,
-    streakDays: 4,
-    accuracyRate: 78.5
+    completedMinutes: 0,
+    streakDays: 0,
+    accuracyRate: 0,
   },
   activeAttempt: null,
   todayTasksSummary: {
-    totalTasks: 4,
-    completedTasks: 2
+    totalTasks: 0,
+    completedTasks: 0,
   },
-  recommendedTests: [
-    {
-      id: 'cgl-mock-01',
-      title: 'SSC CGL Tier-I Full Length All-India Live Mock 01',
-      examTitle: 'SSC CGL 2026',
-      durationMinutes: 60,
-      questionsCount: 100,
-      type: 'FULL_LENGTH'
-    },
-    {
-      id: 'rrb-mock-01',
-      title: 'RRB NTPC Stage 1 CBT Full Practice Mock',
-      examTitle: 'RRB NTPC',
-      durationMinutes: 90,
-      questionsCount: 100,
-      type: 'FULL_LENGTH'
-    }
-  ],
-  dailyAffairsCount: 2
+  recommendedTests: [],
+  dailyAffairsCount: 0,
 };
 
 export default function HomeScreen() {
   const router = useRouter();
   const { theme, scaledFontSize, radii, touchTarget, elevations } = useTheme();
-  const { user } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
 
-  const [data, setData] = useState<HomeDashboardResponse>(DEFAULT_HOME_DASHBOARD);
+  const [data, setData] = useState<HomeDashboardResponse>(ZERO_STATE_DASHBOARD);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isCachedData, setIsCachedData] = useState(false);
+
+  // Authentication guard: prevent unauthenticated renders
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) {
+      router.replace('/(auth)/account-options');
+    }
+  }, [authLoading, isAuthenticated, router]);
 
   const loadData = useCallback(async (isRefresh = false) => {
     try {
@@ -79,16 +69,16 @@ export default function HomeScreen() {
         setIsCachedData(false);
         await sqliteDb.setCache(CACHE_KEY_HOME, dashboard);
       } else {
-        setData(DEFAULT_HOME_DASHBOARD);
+        setData(ZERO_STATE_DASHBOARD);
       }
     } catch {
-      // Offline fallback: load from SQLite cache or default mock dashboard
+      // Offline fallback: load from SQLite cache or honest zero-state dashboard
       const cached = await sqliteDb.getCache<HomeDashboardResponse>(CACHE_KEY_HOME);
       if (cached && cached.primaryExam) {
         setData(cached);
         setIsCachedData(true);
       } else {
-        setData(DEFAULT_HOME_DASHBOARD);
+        setData(ZERO_STATE_DASHBOARD);
         setIsCachedData(true);
       }
     } finally {
@@ -98,8 +88,18 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (isAuthenticated) {
+      loadData();
+    }
+  }, [isAuthenticated, loadData]);
+
+  if (authLoading || (!isAuthenticated && !user)) {
+    return (
+      <View style={[styles.centerContainer, { backgroundColor: theme.background }]}>
+        <ActivityIndicator size="large" color={theme.primary} />
+      </View>
+    );
+  }
 
   if (loading && !data) {
     return (
@@ -153,8 +153,8 @@ export default function HomeScreen() {
               {
                 backgroundColor: theme.warningBg,
                 borderColor: theme.warningBorder,
-                borderRadius: radii.lg
-              }
+                borderRadius: radii.lg,
+              },
             ]}
             accessibilityRole="button"
             accessibilityLabel={`Resume active mock attempt: ${data.activeAttempt.testTitle}`}
@@ -187,8 +187,8 @@ export default function HomeScreen() {
                 backgroundColor: theme.surface,
                 borderColor: theme.border,
                 borderRadius: radii.md,
-                ...elevations.subtle
-              }
+                ...elevations.subtle,
+              },
             ]}
             accessibilityRole="button"
             accessibilityLabel="Open today's study plan"
@@ -212,8 +212,8 @@ export default function HomeScreen() {
                 backgroundColor: theme.surface,
                 borderColor: theme.border,
                 borderRadius: radii.md,
-                ...elevations.subtle
-              }
+                ...elevations.subtle,
+              },
             ]}
             accessibilityRole="button"
             accessibilityLabel="Open educational resource library"
@@ -243,50 +243,58 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
-          {(data?.recommendedTests ?? []).map((t) => (
-            <TouchableOpacity
-              key={t.id}
-              onPress={() => router.push(`/mock/${t.id}`)}
-              style={[
-                styles.testCard,
-                {
-                  backgroundColor: theme.surface,
-                  borderColor: theme.border,
-                  borderRadius: radii.md,
-                  minHeight: touchTarget.minTouchSize
-                }
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel={`Start test: ${t.title}`}
-            >
-              <View style={styles.testCardHeader}>
-                <View style={[styles.typeBadge, { backgroundColor: theme.surfaceVariant }]}>
-                  <Text style={[styles.typeText, { color: theme.primary, fontSize: scaledFontSize('xs') }]}>
-                    {t.type.replace(/_/g, ' ')}
-                  </Text>
-                </View>
-                <Text style={[styles.testMetrics, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
-                  {t.durationMinutes} mins • {t.questionsCount} Qs
-                </Text>
-              </View>
-
-              <Text style={[styles.testTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
-                {t.title}
+          {(data?.recommendedTests ?? []).length === 0 ? (
+            <View style={[styles.emptyTestsCard, { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.md }]}>
+              <Text style={[styles.emptyTestsText, { color: theme.textMuted, fontSize: scaledFontSize('sm') }]}>
+                No tests assigned to your target yet. Visit the Mocks tab to browse all available exams.
               </Text>
-
-              <View style={styles.testFooter}>
-                <Text style={[styles.testExamTag, { color: theme.textSubtle, fontSize: scaledFontSize('xs') }]}>
-                  {t.examTitle}
-                </Text>
-                <View style={styles.startRow}>
-                  <Text style={[styles.startText, { color: theme.primary, fontSize: scaledFontSize('sm') }]}>
-                    Start Test
+            </View>
+          ) : (
+            (data?.recommendedTests ?? []).map((t) => (
+              <TouchableOpacity
+                key={t.id}
+                onPress={() => router.push(`/mock/${t.id}`)}
+                style={[
+                  styles.testCard,
+                  {
+                    backgroundColor: theme.surface,
+                    borderColor: theme.border,
+                    borderRadius: radii.md,
+                    minHeight: touchTarget.minTouchSize,
+                  },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={`Start test: ${t.title}`}
+              >
+                <View style={styles.testCardHeader}>
+                  <View style={[styles.typeBadge, { backgroundColor: theme.surfaceVariant }]}>
+                    <Text style={[styles.typeText, { color: theme.primary, fontSize: scaledFontSize('xs') }]}>
+                      {t.type.replace(/_/g, ' ')}
+                    </Text>
+                  </View>
+                  <Text style={[styles.testMetrics, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+                    {t.durationMinutes} mins • {t.questionsCount} Qs
                   </Text>
-                  <ArrowRight size={16} color={theme.primary} />
                 </View>
-              </View>
-            </TouchableOpacity>
-          ))}
+
+                <Text style={[styles.testTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
+                  {t.title}
+                </Text>
+
+                <View style={styles.testFooter}>
+                  <Text style={[styles.testExamTag, { color: theme.textSubtle, fontSize: scaledFontSize('xs') }]}>
+                    {t.examTitle}
+                  </Text>
+                  <View style={styles.startRow}>
+                    <Text style={[styles.startText, { color: theme.primary, fontSize: scaledFontSize('sm') }]}>
+                      Start Test
+                    </Text>
+                    <ArrowRight size={16} color={theme.primary} />
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))
+          )}
         </View>
       </ScrollView>
     </View>
@@ -295,136 +303,134 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1
+    flex: 1,
   },
   centerContainer: {
     flex: 1,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center'
   },
   bellBtn: {
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center'
   },
   scrollContent: {
-    paddingBottom: 32
+    padding: 16,
+    gap: 16,
   },
   resumeCard: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
-    marginHorizontal: 16,
-    marginVertical: 6,
-    borderWidth: 1.5,
-    gap: 12
+    borderWidth: 1,
   },
   resumeIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#FEF3C7',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
+    marginRight: 12,
   },
   resumeContent: {
-    flex: 1
+    flex: 1,
   },
   resumeHeading: {
     fontWeight: '800',
-    letterSpacing: 1
+    letterSpacing: 0.5,
   },
   resumeTitle: {
     fontWeight: '700',
-    marginTop: 2
+    marginTop: 2,
   },
   resumeTime: {
-    marginTop: 2
+    marginTop: 2,
   },
   actionGrid: {
     flexDirection: 'row',
     gap: 12,
-    marginHorizontal: 16,
-    marginTop: 10,
-    marginBottom: 16
   },
   actionCard: {
     flex: 1,
-    padding: 14,
-    borderWidth: 1
+    padding: 16,
+    borderWidth: 1,
   },
   actionIconBox: {
     width: 36,
     height: 36,
-    borderRadius: 8,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8
+    marginBottom: 10,
   },
   actionTitle: {
-    fontWeight: '700'
+    fontWeight: '700',
   },
   actionSub: {
-    marginTop: 4
+    marginTop: 2,
   },
   section: {
-    marginHorizontal: 16,
-    marginTop: 12
+    gap: 12,
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12
   },
   sectionTitle: {
-    fontWeight: '800'
+    fontWeight: '800',
   },
   seeAllText: {
-    fontWeight: '600'
+    fontWeight: '700',
+  },
+  emptyTestsCard: {
+    padding: 20,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  emptyTestsText: {
+    textAlign: 'center',
+    lineHeight: 20,
   },
   testCard: {
     padding: 16,
     borderWidth: 1,
-    marginBottom: 12,
-    gap: 8
+    gap: 8,
   },
   testCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center'
+    alignItems: 'center',
   },
   typeBadge: {
     paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6
+    paddingVertical: 2,
+    borderRadius: 4,
   },
   typeText: {
-    fontWeight: '700'
+    fontWeight: '700',
   },
   testMetrics: {
-    fontWeight: '500'
+    fontWeight: '500',
   },
   testTitle: {
     fontWeight: '700',
-    lineHeight: 22
   },
   testFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9'
+    marginTop: 4,
   },
   testExamTag: {
-    fontWeight: '500'
+    fontWeight: '600',
   },
   startRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4
+    gap: 4,
   },
   startText: {
-    fontWeight: '700'
-  }
+    fontWeight: '700',
+  },
 });

@@ -3,7 +3,9 @@
 import { useState, useEffect } from 'react';
 import { HardDrive, Upload, Eye, Lock, Unlock, CheckCircle2, AlertCircle, FileText, X, Loader2 } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+import { getApiBaseUrl } from '@/lib/api-client';
+
+const API_BASE = getApiBaseUrl();
 
 interface ResourceItem {
   id: string;

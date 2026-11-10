@@ -387,7 +387,7 @@ describe('SidPrep 2.0 Shared API Test Suite', async () => {
     assert.equal(versionRes.statusCode, 200);
     const version = JSON.parse(versionRes.body);
     assert.equal(version.success, true);
-    assert.equal(version.currentVersion, '2.0.1');
+    assert.equal(version.currentVersion, db.appVersion.currentVersion);
     assert.ok(version.apkUrl);
 
     // Update File descriptor endpoint (matching GitHub release update.json)
@@ -397,8 +397,8 @@ describe('SidPrep 2.0 Shared API Test Suite', async () => {
     });
     assert.equal(updateJsonRes.statusCode, 200);
     const updateJson = JSON.parse(updateJsonRes.body);
-    assert.equal(updateJson.version, '2.0.1');
-    assert.equal(updateJson.tag, 'v2.0.1');
+    assert.equal(updateJson.version, db.appVersion.currentVersion);
+    assert.equal(updateJson.tag, `v${db.appVersion.currentVersion}`);
     assert.ok(updateJson.latestApkUrl);
     assert.ok(updateJson.releaseUrl);
   });

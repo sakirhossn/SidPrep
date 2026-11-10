@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { UserProfile, SupportedLanguage } from '@sidprep/contracts';
-import { api } from '../api/client';
+import { UserProfile, SupportedLanguage, StudentRegistrationDraft } from '@sidprep/contracts';
+import { api, ApiError } from '../api/client';
 import { secureStorage } from '../services/secureStorage';
 import { sqliteDb } from '../services/sqliteDatabase';
 import { telemetry } from '../services/telemetry';
@@ -10,8 +10,10 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   isOnboarded: boolean;
-  requestOtp: (email: string, phone?: string) => Promise<{ success: boolean; message: string }>;
-  verifyOtp: (email: string, otp: string) => Promise<boolean>;
+  isIntroCompleted: boolean;
+  isSuspended: boolean;
+  requestOtp: (email: string, phone?: string, registrationDraft?: StudentRegistrationDraft) => Promise<{ success: boolean; message: string; resendAvailableInSeconds?: number }>;
+  verifyOtp: (email: string, otp: string, registrationDraft?: StudentRegistrationDraft) => Promise<{ isNewUser?: boolean; isProfileComplete?: boolean }>;
   logout: () => Promise<void>;
   updatePreferences: (data: {
     selectedExamIds?: string[];
@@ -20,6 +22,7 @@ interface AuthContextType {
     dailyTargetMinutes?: number;
   }) => Promise<void>;
   refreshProfile: () => Promise<void>;
+  markIntroCompleted: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -28,6 +31,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isOnboarded, setIsOnboarded] = useState<boolean>(false);
+  const [isIntroCompleted, setIsIntroCompleted] = useState<boolean>(false);
+  const [isSuspended, setIsSuspended] = useState<boolean>(false);
 
   // Restore session from SecureStore on startup
   useEffect(() => {
@@ -36,6 +41,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         await sqliteDb.init();
         telemetry.track('APP_STARTUP');
+
+        // Check introduction completion status
+        const introDone = await secureStorage.isIntroCompleted();
+        if (isMounted) {
+          setIsIntroCompleted(introDone);
+        }
 
         const token = await secureStorage.getAccessToken();
         if (token) {
@@ -50,21 +61,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 targetExams: (profile as any).targetExams || exams,
               };
               setUser(normalized);
-              setIsOnboarded(exams.length > 0);
+              setIsSuspended(false);
+              const completed = Boolean(
+                normalized.isProfileComplete ||
+                ((normalized as any).firstName && (normalized as any).phone && exams.length > 0)
+              );
+              setIsOnboarded(completed);
+              await secureStorage.saveUserProfile(JSON.stringify(normalized));
             }
-          } catch (e) {
-            // If offline, restore cached profile
-            const cachedUser = await secureStorage.getUserProfile();
-            if (cachedUser && isMounted) {
-              const parsed = JSON.parse(cachedUser);
-              const exams = parsed.selectedExamIds || parsed.targetExams || [];
-              const normalized = {
-                ...parsed,
-                selectedExamIds: exams,
-                targetExams: parsed.targetExams || exams,
-              };
-              setUser(normalized);
-              setIsOnboarded(exams.length > 0);
+          } catch (e: any) {
+            // Distinguish auth rejection (401/403) from network/offline errors
+            const isAuthError = e instanceof ApiError ? (e.isUnauthorized || e.isForbidden) : (e?.statusCode === 401 || e?.statusCode === 403);
+            if (isAuthError) {
+              // Session revoked or account suspended: never restore cached profile as valid
+              if (e?.code === 'ACCOUNT_SUSPENDED' && isMounted) {
+                setIsSuspended(true);
+              }
+              await secureStorage.clearAuth();
+              if (isMounted) {
+                setUser(null);
+                setIsOnboarded(false);
+              }
+            } else {
+              // Pure offline fallback: restore cached profile if available
+              const cachedUser = await secureStorage.getUserProfile();
+              if (cachedUser && isMounted) {
+                try {
+                  const parsed = JSON.parse(cachedUser);
+                  const exams = parsed.selectedExamIds || parsed.targetExams || [];
+                  const normalized = {
+                    ...parsed,
+                    selectedExamIds: exams,
+                    targetExams: parsed.targetExams || exams,
+                  };
+                  setUser(normalized);
+                  setIsOnboarded(Boolean(normalized.isProfileComplete || exams.length > 0));
+                } catch {
+                  // Corrupt cache
+                }
+              }
             }
           }
         }
@@ -80,15 +115,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  const requestOtp = useCallback(async (email: string, phone?: string) => {
-    const res = await api.requestOtp({ email, phone });
-    return { success: res.success, message: res.message };
+  const markIntroCompleted = useCallback(async () => {
+    await secureStorage.setIntroCompleted(true);
+    setIsIntroCompleted(true);
   }, []);
 
-  const verifyOtp = useCallback(async (email: string, otp: string) => {
+  const requestOtp = useCallback(async (email: string, phone?: string, registrationDraft?: StudentRegistrationDraft) => {
+    if (registrationDraft) {
+      await secureStorage.saveRegistrationDraft(registrationDraft);
+    }
+    const res = await api.requestOtp({ email, phone, registrationDraft });
+    return {
+      success: res.success,
+      message: res.message,
+      resendAvailableInSeconds: (res as any).resendAvailableInSeconds || 30
+    };
+  }, []);
+
+  const verifyOtp = useCallback(async (email: string, otp: string, registrationDraft?: StudentRegistrationDraft) => {
     try {
-      const res = await api.verifyOtp({ email, otp });
-      // Fetch full profile
+      const res = await api.verifyOtp({ email, otp, registrationDraft });
+      await secureStorage.clearRegistrationDraft();
+
+      // Fetch authoritative full profile
       const profile = await api.getMe();
       const exams = profile.selectedExamIds || (profile as any).targetExams || [];
       const normalized = {
@@ -97,17 +146,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         targetExams: (profile as any).targetExams || exams,
       };
       setUser(normalized);
-      setIsOnboarded(exams.length > 0);
-      return true;
-    } catch (e) {
+      setIsSuspended(false);
+      const completed = Boolean(
+        normalized.isProfileComplete ||
+        ((normalized as any).firstName && (normalized as any).phone && exams.length > 0)
+      );
+      setIsOnboarded(completed);
+      await secureStorage.saveUserProfile(JSON.stringify(normalized));
+
+      return {
+        isNewUser: res.user?.isNewUser,
+        isProfileComplete: completed
+      };
+    } catch (e: any) {
+      if (e?.code === 'ACCOUNT_SUSPENDED') {
+        setIsSuspended(true);
+      }
       throw e;
     }
   }, []);
 
   const logout = useCallback(async () => {
-    await api.logout();
+    try {
+      await api.logout();
+    } catch {
+      // Ignore network errors on logout
+    }
+    await secureStorage.clearAuth();
     setUser(null);
     setIsOnboarded(false);
+    setIsSuspended(false);
   }, []);
 
   const updatePreferences = useCallback(async (data: {
@@ -124,7 +192,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       targetExams: (updated as any).targetExams || exams,
     };
     setUser(normalized);
-    setIsOnboarded(exams.length > 0);
+    const completed = Boolean(
+      normalized.isProfileComplete ||
+      ((normalized as any).firstName && (normalized as any).phone && exams.length > 0)
+    );
+    setIsOnboarded(completed);
     await secureStorage.saveUserProfile(JSON.stringify(normalized));
   }, []);
 
@@ -138,7 +210,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         targetExams: (profile as any).targetExams || exams,
       };
       setUser(normalized);
-      setIsOnboarded(exams.length > 0);
+      const completed = Boolean(
+        normalized.isProfileComplete ||
+        ((normalized as any).firstName && (normalized as any).phone && exams.length > 0)
+      );
+      setIsOnboarded(completed);
       await secureStorage.saveUserProfile(JSON.stringify(normalized));
     } catch {
       // Retain existing profile if offline
@@ -152,11 +228,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAuthenticated: Boolean(user),
         isLoading,
         isOnboarded,
+        isIntroCompleted,
+        isSuspended,
         requestOtp,
         verifyOtp,
         logout,
         updatePreferences,
-        refreshProfile
+        refreshProfile,
+        markIntroCompleted
       }}
     >
       {children}

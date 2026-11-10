@@ -1,8 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Mail, KeyRound, ArrowRight, ShieldCheck } from 'lucide-react-native';
+import { Mail, KeyRound, ArrowRight, ArrowLeft, ShieldCheck, AlertCircle } from 'lucide-react-native';
 import { useAuth } from '../../src/context/AuthContext';
 import { useTheme } from '../../src/context/ThemeContext';
 
@@ -18,6 +29,7 @@ export default function LoginScreen() {
   const [isOtpSent, setIsOtpSent] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let timer: any;
@@ -28,7 +40,9 @@ export default function LoginScreen() {
   }, [countdown]);
 
   const handleRequestOtp = async () => {
+    setErrorMsg(null);
     if (!email || !email.includes('@')) {
+      setErrorMsg('Please enter a valid student email address.');
       Alert.alert('Invalid Email', 'Please enter a valid student email address.');
       return;
     }
@@ -37,27 +51,40 @@ export default function LoginScreen() {
     try {
       const res = await requestOtp(email.trim().toLowerCase(), phone.trim() || undefined);
       setIsOtpSent(true);
-      setCountdown(60);
+      setCountdown(res.resendAvailableInSeconds || 30);
       Alert.alert('Verification Code Sent', res.message || 'Check your inbox for the 6-digit code.');
     } catch (err: any) {
-      Alert.alert('Request Failed', err.message || 'Unable to send OTP at this time. Please retry.');
+      const msg = err.message || 'Unable to send OTP at this time. Please retry.';
+      setErrorMsg(msg);
+      Alert.alert('Request Failed', msg);
     } finally {
       setLoading(false);
     }
   };
 
   const handleVerifyOtp = async () => {
+    setErrorMsg(null);
     if (otp.length !== 6) {
-      Alert.alert('Invalid Code', 'Please enter the 6-digit verification code.');
+      setErrorMsg('Please enter the complete 6-digit verification code.');
       return;
     }
 
     setLoading(true);
     try {
-      await verifyOtp(email.trim().toLowerCase(), otp.trim());
-      router.replace('/(tabs)');
+      const result = await verifyOtp(email.trim().toLowerCase(), otp.trim());
+      if (result.isProfileComplete) {
+        router.replace('/(tabs)');
+      } else {
+        router.replace('/(auth)/onboarding');
+      }
     } catch (err: any) {
-      Alert.alert('Verification Failed', err.message || 'The OTP code is invalid or has expired.');
+      if (err?.code === 'ACCOUNT_SUSPENDED') {
+        router.replace('/(auth)/account-options?suspended=true');
+        return;
+      }
+      const msg = err.message || 'The OTP code is invalid or has expired.';
+      setErrorMsg(msg);
+      Alert.alert('Verification Failed', msg);
     } finally {
       setLoading(false);
     }
@@ -66,9 +93,22 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={[styles.container, { backgroundColor: theme.background, paddingTop: Math.max(insets.top, 24) }]}
+      style={[styles.container, { backgroundColor: theme.background, paddingTop: Math.max(insets.top, 20) }]}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 36) }]}>
+        {/* Top Back Navigation */}
+        <TouchableOpacity
+          onPress={() => router.replace('/(auth)/account-options')}
+          style={[styles.backButton, { minHeight: touchTarget.minTouchSize }]}
+          accessibilityRole="button"
+          accessibilityLabel="Back to account options"
+        >
+          <ArrowLeft size={20} color={theme.text} />
+          <Text style={[styles.backButtonText, { color: theme.text, fontSize: scaledFontSize('sm') }]}>
+            Account Options
+          </Text>
+        </TouchableOpacity>
+
         {/* Brand Header */}
         <View style={styles.header}>
           <Text style={[styles.brand, { color: theme.primary, fontSize: scaledFontSize('sm') }]}>
@@ -80,9 +120,28 @@ export default function LoginScreen() {
           <Text style={[styles.subtitle, { color: theme.textMuted, fontSize: scaledFontSize('base') }]}>
             {isOtpSent
               ? `We sent a one-time verification code to ${email}.`
-              : 'Enter your email to receive a secure one-time passcode.'}
+              : 'Enter your registered email to receive a secure one-time passcode.'}
           </Text>
         </View>
+
+        {/* Error Alert Box */}
+        {errorMsg && (
+          <View
+            style={[
+              styles.errorCard,
+              {
+                backgroundColor: theme.errorBg || '#FEE2E2',
+                borderColor: theme.error || '#DC2626',
+                borderRadius: radii.md,
+              },
+            ]}
+          >
+            <AlertCircle size={18} color={theme.error || '#DC2626'} style={{ marginRight: 8 }} />
+            <Text style={[styles.errorCardText, { color: theme.error || '#DC2626', fontSize: scaledFontSize('xs') }]}>
+              {errorMsg}
+            </Text>
+          </View>
+        )}
 
         {/* Input Form */}
         <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.lg }]}>
@@ -141,10 +200,22 @@ export default function LoginScreen() {
                     <Text style={[styles.primaryButtonText, { color: theme.textInverse, fontSize: scaledFontSize('base') }]}>
                       Send Verification Code
                     </Text>
-                    <ArrowRight size={20} color={theme.textInverse} />
+                    <ArrowRight size={20} color={theme.textInverse} style={{ marginLeft: 8 }} />
                   </>
                 )}
               </TouchableOpacity>
+
+              {/* Registration Link */}
+              <View style={styles.registerLinkRow}>
+                <Text style={[styles.registerPrompt, { color: theme.textMuted, fontSize: scaledFontSize('sm') }]}>
+                  Don't have an account yet?
+                </Text>
+                <TouchableOpacity onPress={() => router.push('/(auth)/register')}>
+                  <Text style={[styles.registerLink, { color: theme.primary, fontSize: scaledFontSize('sm') }]}>
+                    Create Account
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </>
           ) : (
             <>
@@ -163,16 +234,17 @@ export default function LoginScreen() {
                     maxLength={6}
                     value={otp}
                     onChangeText={setOtp}
+                    autoFocus
                   />
                 </View>
               </View>
 
               <TouchableOpacity
                 onPress={handleVerifyOtp}
-                disabled={loading}
+                disabled={loading || otp.length !== 6}
                 style={[
                   styles.primaryButton,
-                  { minHeight: touchTarget.minTouchSize, backgroundColor: theme.primary, borderRadius: radii.md }
+                  { minHeight: touchTarget.minTouchSize, backgroundColor: otp.length === 6 ? theme.primary : theme.surfaceVariant, borderRadius: radii.md }
                 ]}
                 accessibilityRole="button"
                 accessibilityLabel="Verify code and continue"
@@ -180,7 +252,7 @@ export default function LoginScreen() {
                 {loading ? (
                   <ActivityIndicator color={theme.textInverse} />
                 ) : (
-                  <Text style={[styles.primaryButtonText, { color: theme.textInverse, fontSize: scaledFontSize('base') }]}>
+                  <Text style={[styles.primaryButtonText, { color: otp.length === 6 ? theme.textInverse : theme.textMuted, fontSize: scaledFontSize('base') }]}>
                     Verify and Sign In
                   </Text>
                 )}
@@ -236,8 +308,17 @@ const styles = StyleSheet.create({
     padding: 20,
     paddingBottom: 40
   },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 16,
+  },
+  backButtonText: {
+    fontWeight: '600',
+  },
   header: {
-    marginBottom: 24
+    marginBottom: 20
   },
   brand: {
     fontWeight: '800',
@@ -251,6 +332,17 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     lineHeight: 22
+  },
+  errorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  errorCardText: {
+    flex: 1,
+    fontWeight: '600',
   },
   card: {
     padding: 20,
@@ -270,27 +362,38 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12
   },
   inputIcon: {
-    marginRight: 8
+    marginRight: 10
   },
   input: {
-    flex: 1,
-    fontWeight: '600'
+    flex: 1
   },
   primaryButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
     marginTop: 8
   },
   primaryButtonText: {
     fontWeight: '700'
   },
+  registerLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 8,
+  },
+  registerPrompt: {
+    fontWeight: '500',
+  },
+  registerLink: {
+    fontWeight: '700',
+  },
   resendRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 4
+    justifyContent: 'space-between',
+    marginTop: 8
   },
   resendText: {
     fontWeight: '500'
@@ -301,9 +404,9 @@ const styles = StyleSheet.create({
   securityBox: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
     marginTop: 24,
-    gap: 8,
-    paddingHorizontal: 8
+    paddingHorizontal: 4
   },
   securityText: {
     flex: 1,

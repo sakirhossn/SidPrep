@@ -20,18 +20,44 @@ import { query } from './pool.js';
 export interface StudentRecord {
   id: string;
   email: string;
+  firstName?: string;
+  lastName?: string;
+  isSingleName?: boolean;
   phone?: string;
+  phoneCountryCode?: string;
+  isPhoneVerified?: boolean;
   preferredLanguage: 'en' | 'hi' | 'bn';
   targetExams: string[];
+  primaryExamId?: string;
   dailyGoalMinutes: number;
   streakDays: number;
   status: 'ACTIVE' | 'SUSPENDED' | 'DELETED';
   isEmailVerified: boolean;
+  isProfileComplete?: boolean;
   tokenVersion?: number;
   isDemo?: boolean;
   completedTasks?: string[];
   settings?: Record<string, any>;
+  registrationIp?: string;
+  lastLoginIp?: string;
+  lastLoginAt?: string;
+  lastActivityAt?: string;
+  loginSource?: 'app' | 'web';
   createdAt: string;
+}
+
+export interface StudentSessionRecord {
+  id: string;
+  studentId: string;
+  tokenVersion: number;
+  refreshTokenHash?: string;
+  deviceInfo?: Record<string, any>;
+  ipAddress?: string;
+  loginSource?: 'app' | 'web';
+  userAgent?: string;
+  createdAt: string;
+  lastSeenAt: string;
+  revokedAt?: string | null;
 }
 
 export interface AdminUserRecord {
@@ -53,6 +79,7 @@ export interface ExamRecord {
   bodyCode: 'SSC' | 'RRB' | 'WBPSC' | 'IBPS';
   code: string;
   name: string;
+  title?: string;
   description: string;
   stagesCount: number;
   verifiedDate: string;
@@ -75,6 +102,10 @@ export interface ExamRecord {
   lastVerifiedBy?: string;
   isActive?: boolean;
   body?: string;
+  isDateAnnounced?: boolean;
+  officialExamDate?: string | null;
+  currentStatus?: string;
+  displayOrder?: number;
 }
 
 export interface ExamProposalRecord {
@@ -144,6 +175,7 @@ export interface AttemptRecord {
   expiresAt?: string;
   submittedAt?: string;
   durationSeconds: number;
+  timeSpentSeconds?: number;
   score: number;
   maxScore: number;
   accuracy: number;
@@ -285,6 +317,80 @@ export class SidPrepDatabase {
     return Array.from(this.examProposals.values())
       .reverse()
       .find((p) => p.examId === examId && p.status === 'PENDING');
+  }
+
+  public async createStudentSession(data: {
+    studentId: string;
+    tokenVersion: number;
+    refreshTokenHash?: string;
+    ipAddress?: string;
+    userAgent?: string;
+    loginSource?: 'app' | 'web';
+    deviceInfo?: Record<string, any>;
+  }): Promise<string> {
+    const sessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    try {
+      await query(
+        `INSERT INTO student_sessions (
+          id, student_id, token_version, refresh_token_hash, device_info,
+          ip_address, login_source, user_agent, expires_at, created_at, last_seen_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + INTERVAL '30 days', NOW(), NOW())`,
+        [
+          sessionId,
+          data.studentId,
+          data.tokenVersion,
+          data.refreshTokenHash || 'none',
+          JSON.stringify(data.deviceInfo || {}),
+          data.ipAddress || null,
+          data.loginSource || 'app',
+          data.userAgent || null,
+        ]
+      );
+    } catch (err: any) {
+      console.warn('[SidPrepDatabase] Failed to insert student_sessions:', err.message);
+    }
+    return sessionId;
+  }
+
+  public async revokeStudentSessions(studentId: string): Promise<void> {
+    try {
+      await query(
+        `UPDATE student_sessions SET revoked_at = NOW() WHERE student_id = $1 AND revoked_at IS NULL`,
+        [studentId]
+      );
+    } catch (err: any) {
+      console.warn('[SidPrepDatabase] Failed to revoke student_sessions:', err.message);
+    }
+  }
+
+  public async getStudentSessions(studentId: string): Promise<StudentSessionRecord[]> {
+    try {
+      const res = await query<StudentSessionRecord>(
+        `SELECT * FROM student_sessions WHERE student_id = $1 ORDER BY created_at DESC`,
+        [studentId]
+      );
+      return res.rows;
+    } catch {
+      return [];
+    }
+  }
+
+  public async recordStudentLogin(data: {
+    studentId: string;
+    ipAddress?: string;
+    loginSource?: 'app' | 'web';
+    userAgent?: string;
+  }): Promise<void> {
+    const historyId = `lh_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    try {
+      await query(
+        `INSERT INTO student_login_history (id, student_id, ip_address, login_source, user_agent, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())`,
+        [historyId, data.studentId, data.ipAddress || null, data.loginSource || 'app', data.userAgent || null]
+      );
+    } catch (err: any) {
+      console.warn('[SidPrepDatabase] Failed to insert student_login_history:', err.message);
+    }
   }
 
   public appVersion: AppVersionRecord = {
@@ -489,7 +595,7 @@ export class SidPrepDatabase {
         // Table may not exist yet or query failed in unit test mock
       }
 
-      if (this.exams.size === 0 || (process.env.NODE_ENV === 'test' && this.tests.size === 0)) {
+      if (this.exams.size === 0 || this.questions.size === 0 || (process.env.NODE_ENV === 'test' && this.tests.size === 0)) {
         await this.persistInitialData();
       }
       if (process.env.NODE_ENV === 'test') {

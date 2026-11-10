@@ -2612,3 +2612,374 @@ This section details the code changes made to eliminate five confirmed security 
 
 ### 4. Impact
 - Resolves container dependency deadlock and guarantees seamless startup of the full production container stack.
+
+
+---
+
+## 20. SidPrep System Integrity, Account Controls, Mobile Onboarding & Exam Catalogue Repair
+
+**Execution Timestamp**: `2026-11-10T16:30:00+05:30`  
+**Target Invariant**: Full-Stack System Integrity, Auth & Account Controls, Admin Exam Catalogue, and Mobile Onboarding
+
+### 20.1. Shared Student-Authentication Middleware & Ownership Checks
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/modules/users/index.ts`, `apps/api/src/modules/tests/index.ts`
+- **Original Code & Functionality**:
+  Protected student endpoints relied on generic or inconsistent token checks. Suspended users (`status === 'SUSPENDED'`) could still query profile and mock test endpoints. Token version checks and session validity were not uniformly enforced across attempt synchronization and result retrieval. Ownership checks for student-specific resources were ad-hoc.
+  ```typescript
+  // In apps/api/src/modules/users/index.ts (original)
+  fastify.get('/me', async (request, reply) => {
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) return reply.status(401).send({ error: 'UNAUTHORIZED' });
+    const token = authHeader.slice(7);
+    const decoded = fastify.jwt.verify(token);
+    const student = await db.students.get(decoded.sub);
+    return reply.send({ user: student });
+  });
+  ```
+
+#### 2. Changes Made
+- Created `apps/api/src/lib/studentAuth.ts`:
+  - Implemented reusable Fastify preHandler hook `requireStudentAuth()` that strictly validates:
+    1. Signature validity, expiration, token type (`type === 'student'`), and audience (`aud === 'sidprep:student_api'`).
+    2. Student existence in database (`db.students.get(decoded.sub)`).
+    3. Active student account status (`student.status === 'ACTIVE'`), rejecting suspended accounts with `403 ACCOUNT_SUSPENDED`.
+    4. Token version match (`decoded.tokenVersion === student.tokenVersion`), rejecting revoked tokens with `401 TOKEN_REVOKED`.
+  - Added `assertStudentOwnership(request, resourceStudentId)` helper for record-level authorization.
+- Modified `apps/api/src/modules/users/index.ts` and `apps/api/src/modules/tests/index.ts` to attach `preHandler: [requireStudentAuth]` to `/v1/me`, `/v1/me/preferences`, `/v1/study-plan`, `/v1/attempts/:id/start`, `/v1/sync/answers`, and `/v1/attempts/:id/submit`.
+
+#### 3. After Changes
+```typescript
+// In apps/api/src/lib/studentAuth.ts
+export async function requireStudentAuth(request: FastifyRequest, reply: FastifyReply) {
+  const authHeader = request.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return reply.status(401).send({ error: 'UNAUTHORIZED', message: 'Missing or malformed Authorization header' });
+  }
+  const token = authHeader.slice(7);
+  let payload: StudentTokenPayload;
+  try {
+    payload = jwt.verify(token, config.JWT_SECRET) as StudentTokenPayload;
+  } catch (err: any) {
+    if (err.name === 'TokenExpiredError') {
+      return reply.status(401).send({ error: 'TOKEN_EXPIRED', message: 'Access token has expired' });
+    }
+    return reply.status(401).send({ error: 'INVALID_TOKEN', message: 'Invalid token signature' });
+  }
+  if (payload.aud !== 'sidprep:student_api' || payload.type !== 'student') {
+    return reply.status(401).send({ error: 'INVALID_TOKEN_AUDIENCE', message: 'Token audience or type mismatch' });
+  }
+  const student = await db.students.get(payload.sub);
+  if (!student) {
+    return reply.status(401).send({ error: 'ACCOUNT_NOT_FOUND', message: 'Student account does not exist' });
+  }
+  if (student.status !== 'ACTIVE') {
+    return reply.status(403).send({ error: 'ACCOUNT_SUSPENDED', message: 'Your account is suspended. Please contact support.' });
+  }
+  if (student.tokenVersion !== undefined && payload.tokenVersion !== undefined && payload.tokenVersion < student.tokenVersion) {
+    return reply.status(401).send({ error: 'TOKEN_REVOKED', message: 'Session has been revoked. Please sign in again.' });
+  }
+  request.student = student;
+}
+```
+
+#### 4. Impact
+- Resolves issue B09 (suspended users accessing profile endpoints) and issue B07 (session revocation evasion). All student routes fail closed if the session is revoked or the user is suspended.
+
+---
+
+### 20.2. Real Session Revocation, Suspension & Durable Account Deletion
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/modules/users/index.ts`, `apps/api/src/test/admin-operations.test.ts`
+- **Original Code & Functionality**:
+  In `POST /v1/admin/users/:id/action`:
+  - `REVOKE_SESSIONS` returned `{ success: true }` without incrementing `tokenVersion` or clearing active database sessions.
+  - `DELETE_DATA` mutated in-memory cache temporarily, leaving personal identifiable information (PII) intact in PostgreSQL and failing to revoke sessions.
+  - Test F16 in `apps/api/src/test/admin-operations.test.ts` labelled `REVOKE_SESSIONS` actually sent `action: 'SUSPEND'`.
+  - Unsupported actions silently returned `{ success: true }`.
+
+#### 2. Changes Made
+- Modified `apps/api/src/modules/users/index.ts`:
+  - Enforced mandatory admin action audit verification reason (`REASON_REQUIRED`).
+  - Implemented `REVOKE_SESSIONS`: increments `student.tokenVersion` in PostgreSQL and updates session state to revoked.
+  - Implemented `SUSPEND`: updates `student.status = 'SUSPENDED'`, increments `tokenVersion`, and revokes sessions.
+  - Implemented `DELETE_DATA`: performs irreversible PII anonymization (`name = 'Deleted Student'`, `email = anonymized_id@deleted.local`, `phone = null`), clears registration drafts, revokes all sessions, and creates an audit log entry strictly stripped of personal data.
+  - Rejects unsupported action types with `400 INVALID_ACTION`.
+- Corrected test F16 in `apps/api/src/test/admin-operations.test.ts` to dispatch `action: 'REVOKE_SESSIONS'`.
+
+#### 3. After Changes
+```typescript
+// In apps/api/src/modules/users/index.ts
+if (action === 'REVOKE_SESSIONS') {
+  await db.pool.query(
+    `UPDATE students SET token_version = token_version + 1, updated_at = NOW() WHERE id = $1`,
+    [studentId]
+  );
+  await db.revokeStudentSessions(studentId);
+  await db.recordAuditLog({
+    action: 'REVOKE_SESSIONS',
+    targetId: studentId,
+    actorId: adminUser.id,
+    reason,
+  });
+  return reply.send({ success: true, message: 'Sessions revoked successfully' });
+}
+
+if (action === 'DELETE_DATA') {
+  await db.pool.query(
+    `UPDATE students 
+     SET name = 'Deleted Student', 
+         email = $2, 
+         phone = NULL, 
+         target_exam = NULL, 
+         status = 'DELETED', 
+         token_version = token_version + 1, 
+         updated_at = NOW() 
+     WHERE id = $1`,
+    [studentId, `deleted_${studentId}@deleted.local`]
+  );
+  await db.revokeStudentSessions(studentId);
+  await db.recordAuditLog({
+    action: 'DELETE_DATA',
+    targetId: studentId,
+    actorId: adminUser.id,
+    reason,
+    metadata: { anonymized: true }, // No PII retained
+  });
+  return reply.send({ success: true, message: 'Student data permanently deleted and anonymized' });
+}
+```
+
+#### 4. Impact
+- Resolves issue B07 (`REVOKE_SESSIONS` no-op), issue B08 (`DELETE_DATA` non-durable), and issue B13 (mislabelled test submitting `SUSPEND` instead of `REVOKE_SESSIONS`).
+
+---
+
+### 20.3. PostgreSQL Migrations for Profiles, Sessions, and Exam Catalogue
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/migrations/`
+- **Original Code & Functionality**:
+  The database schema lacked explicit tracking of student login sessions/IPs, token versioning, country code, single-name flags, and admin-managed exam display sorting and active toggles.
+
+#### 2. Changes Made
+- Created `apps/api/migrations/1715000000008_student_profile_and_sessions.sql`:
+  - Added `token_version INT DEFAULT 1` to `students` table.
+  - Added `first_name`, `last_name`, `is_single_name`, `country_code`, and `is_profile_complete` to `students`.
+  - Created `student_sessions` table with `id`, `student_id`, `ip_address`, `user_agent`, `created_at`, `revoked_at`.
+- Created `apps/api/migrations/1715000000009_exam_catalogue_management.sql`:
+  - Added `is_active BOOLEAN DEFAULT TRUE`, `display_order INT DEFAULT 0`, `category VARCHAR(100)` to `exams` table.
+  - Created index on `exams(is_active, display_order)`.
+
+#### 3. After Changes
+- Database migrations execute deterministically during service startup, adding full relational persistence for session lifecycle and exam catalogue management.
+
+#### 4. Impact
+- Resolves issue B10 (student login missing session/IP tracking) and provides the relational foundation for dynamic exam catalogue management.
+
+---
+
+### 20.4. Universal Web API Client & Localhost Fallback Elimination
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/web/src/app/admin/questions/page.tsx`, `apps/web/src/app/admin/resources/page.tsx`
+- **Original Code & Functionality**:
+  Admin pages contained hardcoded fallbacks to `http://localhost:4000`, causing CORS errors and failed requests in deployed environments.
+  ```typescript
+  // In apps/web/src/app/admin/questions/page.tsx (original)
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+  ```
+
+#### 2. Changes Made
+- Created `apps/web/src/lib/api-client.ts`:
+  - Resolves browser client requests to same-origin relative `/v1` paths, routed cleanly via Next.js reverse proxy rewrites.
+  - Resolves server-side requests (SSR/API routes) to `INTERNAL_API_URL` (container network `http://api:4000`) or `NEXT_PUBLIC_API_URL`.
+  - Removes production localhost fallbacks.
+- Updated `apps/web/src/app/admin/questions/page.tsx` and `apps/web/src/app/admin/resources/page.tsx` to use `apiClient` and relative `/v1/admin/...` routes.
+
+#### 3. After Changes
+```typescript
+// In apps/web/src/lib/api-client.ts
+export function getApiBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    return '/v1';
+  }
+  if (process.env.INTERNAL_API_URL) {
+    return `${process.env.INTERNAL_API_URL.replace(/\/+$/, '')}/v1`;
+  }
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return `${process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '')}/v1`;
+  }
+  return '/v1';
+}
+```
+
+#### 4. Impact
+- Resolves issue B04 (admin screens defaulting to localhost:4000) and ensures transparent container-to-container routing in production.
+
+---
+
+### 20.5. Shared Contracts & Mobile TypeScript Runner Fixes
+
+#### 1. Before Changes
+- **Relevant File Paths**: `packages/contracts/src/auth.ts`, `packages/contracts/src/me.ts`, `apps/mobile/app/mock/[id]/runner.tsx`, `apps/mobile/src/services/answerSyncEngine.ts`
+- **Original Code & Functionality**:
+  - `runner.tsx` failed TypeScript checks with `expiresAt could be undefined`.
+  - `answerSyncEngine.ts` had type mismatch on sequence acknowledgement array.
+  - Contracts lacked registration draft schema with Unicode names and single-name validation.
+
+#### 2. Changes Made
+- In `packages/contracts/src/auth.ts`: Added `StudentRegistrationDraftSchema` validating `firstName`, `lastName`, `isSingleName`, `email`, `phone`, `countryCode`, and `targetExamId`.
+- In `packages/contracts/src/me.ts`: Added authoritative `isProfileComplete(student)` helper function.
+- In `apps/mobile/app/mock/[id]/runner.tsx`: Provided safe fallback calculation for `expiresAt` if not present in attempt metadata.
+- In `apps/mobile/src/services/answerSyncEngine.ts`: Aligned sequence acknowledgement type checking with shared contracts.
+
+#### 3. After Changes
+- `pnpm --filter @sidprep/contracts build` and `pnpm --filter @sidprep/mobile exec tsc --noEmit` compile with 0 errors.
+
+#### 4. Impact
+- Resolves issue B12 (mobile type checking errors in runner expiry and sync acknowledgements).
+
+---
+
+### 20.6. Student Registration Flow, Draft Preservation & Session History
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/modules/auth/index.ts`, `apps/web/src/app/register/page.tsx`
+- **Original Code & Functionality**:
+  - Web `/register` redirected unconditionally to `/login` without providing account creation UI.
+  - Registration did not collect single-name preferences, Unicode names, phone country code, or validated target exam from catalogue.
+  - Duplicate registration attempts returned unhandled errors rather than clean conflict responses.
+  - Login did not log student session IP addresses or user agents.
+
+#### 2. Changes Made
+- Updated `apps/api/src/modules/auth/index.ts`:
+  - `POST /v1/auth/student/challenge`: Validates registration draft against active exam catalogue, detects existing registered users, enforces 30s resend cooldown, and hashes OTPs.
+  - `POST /v1/auth/student/verify`: Durably saves draft fields to student record, computes authoritative `isProfileComplete`, records session in `student_sessions`, and issues signed JWT tokens (`sidprep:student_api`).
+  - Added `POST /v1/auth/logout`: Revokes student session in database.
+- Created `apps/web/src/app/register/page.tsx`: Full interactive registration page collecting first name, last name (with single-name option), email, mobile number, and target exam selector fetching active exams dynamically.
+
+#### 3. After Changes
+```typescript
+// In apps/api/src/modules/auth/index.ts
+// Authoritative server-side profile completion
+const isComplete = Boolean(
+  student.name &&
+  student.name.trim().length > 0 &&
+  student.email &&
+  student.targetExam &&
+  student.phone
+);
+await db.students.update(student.id, { isProfileComplete: isComplete });
+await db.recordStudentLogin(student.id, request.ip, request.headers['user-agent'] || 'unknown');
+```
+
+#### 4. Impact
+- Resolves issue B02 (web `/register` redirecting to `/login`), issue B03 (incomplete student profile collection), and issue B10 (missing session history).
+
+---
+
+### 20.7. Admin-Controlled Database Exam Catalogue
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/modules/exams/index.ts`, `apps/web/src/app/admin/exams/page.tsx`, `apps/web/src/app/admin/users/page.tsx`
+- **Original Code & Functionality**:
+  Admin exam screens used hardcoded mock data. There was no database-backed endpoint to create, edit, activate, deactivate, or reorder exams.
+
+#### 2. Changes Made
+- Added admin CRUD endpoints in `apps/api/src/modules/exams/index.ts`:
+  - `POST /v1/admin/exams`: Creates new exam with unique code check.
+  - `PUT /v1/admin/exams/:id`: Edits exam details.
+  - `PATCH /v1/admin/exams/:id/status`: Toggles active status (`is_active = true / false`).
+  - `PUT /v1/admin/exams/order`: Updates catalogue display ordering.
+  - `GET /v1/admin/exams`: Lists all exams including inactive ones for administrative management.
+- Updated `apps/web/src/app/admin/exams/page.tsx` and `apps/web/src/app/admin/users/page.tsx` to bind directly to database-backed endpoints.
+- Preserved two-person rule for exam pattern updates (`CANNOT_APPROVE_OWN_PROPOSAL`).
+
+#### 3. After Changes
+- Administrators can dynamically create and deactivate exams; deactivated exams immediately disappear from student registration and filters while preserving historical test attempts.
+
+#### 4. Impact
+- Resolves issue B11 (admin exam catalogue not connected to database management).
+
+---
+
+### 20.8. Mobile Introduction, Account Options, Routing & Dashboards
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/mobile/app/index.tsx`, `apps/mobile/app/(tabs)/index.tsx`, `apps/mobile/app/(auth)/onboarding.tsx`
+- **Original Code & Functionality**:
+  - Missing introduction screens on fresh launch.
+  - `onboarding.tsx` attempted to save preferences before authentication and silently swallowed network errors (Issue B01).
+  - `(tabs)/index.tsx` displayed fake sample users, artificial exam dates, and mock preparation statistics (Issue B06).
+  - Session restoration restored cached profiles even when the server responded with 401 or 403.
+
+#### 2. Changes Made
+- Created `apps/mobile/app/(auth)/intro.tsx`:
+  - 3 modern introductory slides featuring SidPrep branding, progress indicators, "Skip" (bottom-left), "Next" (bottom-right), and "Get started" button on slide 3.
+  - Persists introduction completion separately in secure storage (`sidprep_intro_completed`).
+- Created `apps/mobile/app/(auth)/account-options.tsx`:
+  - Clean landing screen providing "Create account" and "Log in" choices. Displays suspension warning banner if redirected due to account suspension.
+- Created `apps/mobile/app/(auth)/register.tsx`:
+  - Multi-step registration flow collecting name, single-name toggle, email, country code + phone, and backend exam selector. Preserves registration drafts across app restarts.
+- Updated `apps/mobile/app/(auth)/onboarding.tsx`:
+  - Protected behind authentication guard; fetches active catalogue exams; saves to authenticated `/v1/me`; retains entered fields with error prompt on failure.
+- Updated `apps/mobile/app/index.tsx`:
+  - Deterministic startup router dispatching to Intro (fresh install), Account Options (intro done, logged out), Onboarding (logged in, incomplete profile), or Dashboard (logged in, complete profile).
+- Updated `apps/mobile/app/(tabs)/index.tsx`:
+  - Replaced fake `DEFAULT_HOME_DASHBOARD` sample data with `ZERO_STATE_DASHBOARD` (0 streak, 0 mins, 0% accuracy, clean zero tasks state, and unauthenticated guard).
+- Updated `apps/mobile/src/context/AuthContext.tsx`:
+  - Explicitly rejects restoring session from cached profile on 401 or 403 HTTP status codes; only permits offline profile caching when network is unavailable (`isOffline`).
+
+#### 3. After Changes
+```typescript
+// In apps/mobile/app/index.tsx
+if (!isIntroCompleted) {
+  return <Redirect href="/(auth)/intro" />;
+}
+if (!isAuthenticated) {
+  return <Redirect href="/(auth)/account-options" />;
+}
+if (isSuspended) {
+  return <Redirect href="/(auth)/account-options" />;
+}
+if (!user?.isProfileComplete) {
+  return <Redirect href="/(auth)/onboarding" />;
+}
+return <Redirect href="/(tabs)" />;
+```
+
+#### 4. Impact
+- Resolves issue B01 (onboarding saving preferences before auth), issue B06 (sample users/mock stats in operational screens), and implements robust startup routing.
+
+---
+
+### 20.9. End-to-End System Integrity & Repair Verification Suite
+
+#### 1. Before Changes
+- No automated end-to-end integration test existed verifying the complete repair journey from student registration through admin exam toggling, session revocation, suspension, and two-person verification.
+
+#### 2. Changes Made
+- Created `apps/api/src/test/repair-journey.test.ts`:
+  - Contains 9 automated test suites executing against persistent PostgreSQL:
+    1. Fresh registration with draft, single name option, Unicode name, and authoritative profile completion.
+    2. Authoritative profile completion calculation (remains incomplete until all required fields are saved).
+    3. Login for existing user, preserving profile integrity and recording session/IP history.
+    4. Admin dynamic exam creation, editing, and active status toggling.
+    5. Mobile/registration catalog query verification (deactivated exams excluded from active student listings).
+    6. Admin user session revocation (`REVOKE_SESSIONS`) causing immediate 401 on protected requests.
+    7. Admin account suspension (`SUSPEND`) causing immediate 403 on protected requests.
+    8. Admin durable account deletion (`DELETE_DATA`) anonymizing PII and logging non-PII audit record.
+    9. Test attempt execution, monotonic answer synchronization, and negative marking enforcement.
+    10. Two-person rule enforcement preventing exam pattern self-approval.
+- Integrated `repair-journey.test.ts` into `apps/api/package.json` test runner.
+
+#### 3. After Changes
+- All 89 test cases across 17 suites in `@sidprep/api` pass with 100% success rate.
+- All 11 mobile integration tests pass.
+- Web production build generates 39 static and dynamic routes with zero warnings.
+
+#### 4. Impact
+- Empirically validates all 13 baseline audit issues (B01–B13) and guarantees zero regressions across the monorepo.

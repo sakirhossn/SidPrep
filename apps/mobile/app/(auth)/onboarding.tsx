@@ -1,8 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  Alert,
+  TextInput,
+  Switch,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Check, ShieldCheck, ArrowRight } from 'lucide-react-native';
+import { Check, ShieldCheck, ArrowRight, User, AlertCircle } from 'lucide-react-native';
 import { ExamSummary, SupportedLanguage } from '@sidprep/contracts';
 import { api } from '../../src/api/client';
 import { useAuth } from '../../src/context/AuthContext';
@@ -12,87 +22,258 @@ export default function OnboardingScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { theme, scaledFontSize, radii, touchTarget } = useTheme();
-  const { updatePreferences } = useAuth();
+  const { user, isAuthenticated, isLoading, updatePreferences } = useAuth();
 
   const [exams, setExams] = useState<ExamSummary[]>([]);
-  const [selectedExams, setSelectedExams] = useState<string[]>(['ssc-cgl']);
-  const [primaryExam, setPrimaryExam] = useState<string>('ssc-cgl');
+  const [selectedExams, setSelectedExams] = useState<string[]>([]);
+  const [primaryExam, setPrimaryExam] = useState<string>('');
   const [selectedLanguage, setSelectedLanguage] = useState<SupportedLanguage>('en');
   const [dailyGoalMinutes, setDailyGoalMinutes] = useState<number>(60);
   const [loading, setLoading] = useState<boolean>(true);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Profile completion fields if missing
+  const [firstName, setFirstName] = useState(user?.firstName || '');
+  const [lastName, setLastName] = useState(user?.lastName || '');
+  const [isSingleName, setIsSingleName] = useState(Boolean(user?.isSingleName));
+  const [phone, setPhone] = useState(user?.phone || '');
+
+  // Protect route: onboarding requires valid authentication
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      router.replace('/(auth)/account-options');
+    }
+  }, [isLoading, isAuthenticated, router]);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const list = await api.getExams();
-        if (mounted) setExams(list);
-      } catch {
-        // Fallback default exams if offline
         if (mounted) {
-          setExams([
-            { id: 'ssc-cgl', body: 'SSC', code: 'SSC_CGL', title: 'SSC CGL 2026', description: 'Combined Graduate Level', currentStatus: 'EXAM_SCHEDULED', isDateAnnounced: true, stagesCount: 2, availableTestsCount: 24 },
-            { id: 'rrb-ntpc', body: 'RRB', code: 'RRB_NTPC', title: 'RRB NTPC', description: 'Non-Technical Categories', currentStatus: 'DATE_NOT_ANNOUNCED', isDateAnnounced: false, stagesCount: 2, availableTestsCount: 18 },
-            { id: 'wbpsc-clerkship', body: 'WBPSC', code: 'WBPSC_CLERKSHIP', title: 'WBPSC Clerkship', description: 'West Bengal Public Service', currentStatus: 'EXAM_SCHEDULED', isDateAnnounced: true, stagesCount: 2, availableTestsCount: 12 },
-            { id: 'ibps-po', body: 'IBPS', code: 'IBPS_PO', title: 'IBPS Probationary Officer', description: 'National Banking Recruitment', currentStatus: 'DATE_NOT_ANNOUNCED', isDateAnnounced: false, stagesCount: 3, availableTestsCount: 15 }
-          ]);
+          const activeList = Array.isArray(list)
+            ? list.filter((e: any) => e.status !== 'INACTIVE')
+            : [];
+          setExams(activeList);
+
+          // Initialize selections with existing user preferences or default to first active exam
+          const existingExams = user?.selectedExamIds || (user as any)?.targetExams || [];
+          if (existingExams.length > 0) {
+            setSelectedExams(existingExams);
+            setPrimaryExam(user?.primaryExamId || existingExams[0]);
+          } else if (activeList.length > 0) {
+            setSelectedExams([activeList[0]!.id]);
+            setPrimaryExam(activeList[0]!.id);
+          }
+
+          if (user?.preferredLanguage) {
+            setSelectedLanguage(user.preferredLanguage);
+          }
+          if (user?.firstName) setFirstName(user.firstName);
+          if (user?.lastName) setLastName(user.lastName);
+          if (typeof user?.isSingleName === 'boolean') setIsSingleName(user.isSingleName);
+          if (user?.phone) setPhone(user.phone);
         }
+      } catch (err) {
+        console.warn('Failed to load exams catalogue:', err);
       } finally {
         if (mounted) setLoading(false);
       }
     })();
-    return () => { mounted = false; };
-  }, []);
+    return () => {
+      mounted = false;
+    };
+  }, [user]);
 
   const toggleExam = (id: string) => {
     if (selectedExams.includes(id)) {
       if (selectedExams.length > 1) {
-        const filtered = selectedExams.filter(e => e !== id);
+        const filtered = selectedExams.filter((e) => e !== id);
         setSelectedExams(filtered);
         if (primaryExam === id) setPrimaryExam(filtered[0]!);
+      } else {
+        Alert.alert('Selection Required', 'At least one target exam must remain selected.');
       }
     } else {
-      setSelectedExams([...selectedExams, id]);
+      const updated = [...selectedExams, id];
+      setSelectedExams(updated);
+      if (!primaryExam) setPrimaryExam(id);
     }
   };
 
-  const handleContinue = async () => {
+  const handleSaveAndContinue = async () => {
+    setErrorMsg(null);
+
+    // Validate mandatory profile fields
+    const trimmedFirst = firstName.trim();
+    if (!trimmedFirst) {
+      setErrorMsg('Please enter your first name.');
+      Alert.alert('Incomplete Profile', 'Please enter your first name.');
+      return;
+    }
+    if (!isSingleName && !lastName.trim()) {
+      setErrorMsg('Please enter your last name or select the single legal name option.');
+      Alert.alert('Incomplete Profile', 'Please enter your last name or select single legal name.');
+      return;
+    }
+    const cleanPhone = phone.replace(/[\s-]/g, '').trim();
+    if (!cleanPhone || cleanPhone.length < 5) {
+      setErrorMsg('Please enter a valid mobile number.');
+      Alert.alert('Incomplete Profile', 'Please enter a valid mobile number.');
+      return;
+    }
+    if (selectedExams.length === 0) {
+      setErrorMsg('Please select at least one preparation exam.');
+      Alert.alert('Incomplete Profile', 'Please select at least one target exam.');
+      return;
+    }
+
+    setSaving(true);
     try {
+      // Durable save to authenticated /me endpoint
       await updatePreferences({
         selectedExamIds: selectedExams,
-        primaryExamId: primaryExam,
+        primaryExamId: primaryExam || selectedExams[0],
         preferredLanguage: selectedLanguage,
-        dailyTargetMinutes: dailyGoalMinutes
+        dailyTargetMinutes: dailyGoalMinutes,
       });
-    } catch {
-      // Local fallback
+
+      // Update full profile attributes
+      await api.updateMe({
+        firstName: trimmedFirst,
+        lastName: isSingleName ? '' : lastName.trim(),
+        isSingleName,
+        phone: cleanPhone,
+        targetExams: selectedExams,
+        primaryExamId: primaryExam || selectedExams[0],
+        preferredLanguage: selectedLanguage,
+        dailyGoalMinutes,
+      });
+
+      // Successfully saved: proceed to dashboard
+      router.replace('/(tabs)');
+    } catch (err: any) {
+      const msg = err.message || 'Failed to save preparation profile. Please retry.';
+      setErrorMsg(msg);
+      Alert.alert('Save Failed', msg);
+    } finally {
+      setSaving(false);
     }
-    router.replace('/(auth)/login');
   };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background, paddingTop: Math.max(insets.top, 16) }]}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 36) }]}>
         {/* Welcome Header */}
         <View style={styles.header}>
           <Text style={[styles.brandBadge, { color: theme.primary, fontSize: scaledFontSize('sm') }]}>
-            SIDPREP 2.0
+            SIDPREP ONBOARDING
           </Text>
-          <Text style={[styles.title, { color: theme.text, fontSize: scaledFontSize('3xl') }]}>
-            Target Your Competitive Exam
+          <Text style={[styles.title, { color: theme.text, fontSize: scaledFontSize('2xl') }]}>
+            Complete Preparation Profile
           </Text>
-          <Text style={[styles.subtitle, { color: theme.textMuted, fontSize: scaledFontSize('base') }]}>
-            High-yield practice, verified syllabus patterns, and authoritative tests for SSC, RRB, WBPSC, and IBPS.
+          <Text style={[styles.subtitle, { color: theme.textMuted, fontSize: scaledFontSize('sm') }]}>
+            Configure your target exams, primary exam focus, and daily target to personalize your mock test series.
           </Text>
         </View>
 
-        {/* Section 1: Choose Target Exams */}
+        {/* Error Alert Box */}
+        {errorMsg && (
+          <View
+            style={[
+              styles.errorCard,
+              {
+                backgroundColor: theme.errorBg || '#FEE2E2',
+                borderColor: theme.error || '#DC2626',
+                borderRadius: radii.md,
+              },
+            ]}
+          >
+            <AlertCircle size={18} color={theme.error || '#DC2626'} style={{ marginRight: 8 }} />
+            <Text style={[styles.errorCardText, { color: theme.error || '#DC2626', fontSize: scaledFontSize('xs') }]}>
+              {errorMsg}
+            </Text>
+          </View>
+        )}
+
+        {/* Section 1: Candidate Identity Details */}
+        <View style={[styles.sectionCard, { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.md }]}>
+          <Text style={[styles.sectionTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
+            Candidate Information
+          </Text>
+
+          <View style={styles.inputGroup}>
+            <Text style={[styles.fieldLabel, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+              First Name
+            </Text>
+            <View style={[styles.inputRow, { borderColor: theme.borderStrong, backgroundColor: theme.surfaceVariant, borderRadius: radii.sm }]}>
+              <User size={18} color={theme.textMuted} style={{ marginRight: 8 }} />
+              <TextInput
+                style={[styles.input, { color: theme.text, fontSize: scaledFontSize('sm') }]}
+                placeholder="First name"
+                placeholderTextColor={theme.textMuted}
+                value={firstName}
+                onChangeText={setFirstName}
+              />
+            </View>
+          </View>
+
+          <View style={styles.singleNameRow}>
+            <Text style={[styles.singleNameLabel, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+              I have only one legal name
+            </Text>
+            <Switch
+              value={isSingleName}
+              onValueChange={(val) => {
+                setIsSingleName(val);
+                if (val) setLastName('');
+              }}
+              trackColor={{ false: theme.border, true: theme.primary }}
+            />
+          </View>
+
+          {!isSingleName && (
+            <View style={styles.inputGroup}>
+              <Text style={[styles.fieldLabel, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+                Last Name
+              </Text>
+              <View style={[styles.inputRow, { borderColor: theme.borderStrong, backgroundColor: theme.surfaceVariant, borderRadius: radii.sm }]}>
+                <TextInput
+                  style={[styles.input, { color: theme.text, fontSize: scaledFontSize('sm') }]}
+                  placeholder="Last name"
+                  placeholderTextColor={theme.textMuted}
+                  value={lastName}
+                  onChangeText={setLastName}
+                />
+              </View>
+            </View>
+          )}
+
+          <View style={styles.inputGroup}>
+            <Text style={[styles.fieldLabel, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+              Mobile Number
+            </Text>
+            <View style={[styles.inputRow, { borderColor: theme.borderStrong, backgroundColor: theme.surfaceVariant, borderRadius: radii.sm }]}>
+              <TextInput
+                style={[styles.input, { color: theme.text, fontSize: scaledFontSize('sm') }]}
+                placeholder="Mobile number"
+                placeholderTextColor={theme.textMuted}
+                value={phone}
+                onChangeText={setPhone}
+                keyboardType="phone-pad"
+              />
+            </View>
+          </View>
+        </View>
+
+        {/* Section 2: Choose Target Exams */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.text, fontSize: scaledFontSize('lg') }]}>
-            1. Select Your Target Exams
+          <Text style={[styles.sectionTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
+            Target Exams (Database Catalogue)
           </Text>
           <Text style={[styles.sectionSubtitle, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
-            Choose one or more. Official syllabus and mocks will personalize to your targets.
+            Choose one or more. Mocks and syllabus patterns are drawn from the database catalogue.
           </Text>
 
           {loading ? (
@@ -111,8 +292,8 @@ export default function OnboardingScreen() {
                         backgroundColor: isSelected ? theme.primaryContainer : theme.surface,
                         borderColor: isSelected ? theme.primary : theme.border,
                         borderRadius: radii.md,
-                        minHeight: touchTarget.minTouchSize
-                      }
+                        minHeight: touchTarget.minTouchSize,
+                      },
                     ]}
                     accessibilityRole="checkbox"
                     accessibilityState={{ checked: isSelected }}
@@ -145,36 +326,33 @@ export default function OnboardingScreen() {
           )}
         </View>
 
-        {/* Section 2: Preferred Language */}
+        {/* Section 3: Preferred Language */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.text, fontSize: scaledFontSize('lg') }]}>
-            2. Preferred Language
+          <Text style={[styles.sectionTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
+            Preferred Question Language
           </Text>
-          <View style={styles.optionRow}>
-            {[
-              { id: 'en', label: 'English' },
-              { id: 'hi', label: 'हिंदी (Hindi)' },
-              { id: 'bn', label: 'বাংলা (Bengali)' }
-            ].map((lang) => {
-              const isSelected = selectedLanguage === lang.id;
+          <View style={styles.languageRow}>
+            {(['en', 'hi', 'bn'] as SupportedLanguage[]).map((lang) => {
+              const isSelected = selectedLanguage === lang;
+              const labels: Record<string, string> = { en: 'English', hi: 'Hindi', bn: 'Bengali' };
               return (
                 <TouchableOpacity
-                  key={lang.id}
-                  onPress={() => setSelectedLanguage(lang.id as SupportedLanguage)}
+                  key={lang}
+                  onPress={() => setSelectedLanguage(lang)}
                   style={[
-                    styles.langChip,
+                    styles.langButton,
                     {
-                      minHeight: touchTarget.minTouchSize,
                       backgroundColor: isSelected ? theme.primary : theme.surface,
                       borderColor: isSelected ? theme.primary : theme.border,
-                      borderRadius: radii.md
-                    }
+                      borderRadius: radii.md,
+                      minHeight: touchTarget.minTouchSize,
+                    },
                   ]}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: isSelected }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Select ${labels[lang]}`}
                 >
-                  <Text style={[styles.langChipText, { color: isSelected ? theme.textInverse : theme.text, fontSize: scaledFontSize('sm') }]}>
-                    {lang.label}
+                  <Text style={[styles.langText, { color: isSelected ? theme.textInverse : theme.text, fontSize: scaledFontSize('sm') }]}>
+                    {labels[lang]}
                   </Text>
                 </TouchableOpacity>
               );
@@ -182,37 +360,30 @@ export default function OnboardingScreen() {
           </View>
         </View>
 
-        {/* Section 3: Daily Study Goal */}
+        {/* Section 4: Daily Target Minutes */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.text, fontSize: scaledFontSize('lg') }]}>
-            3. Daily Study Target
+          <Text style={[styles.sectionTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
+            Daily Study Goal
           </Text>
-          <View style={styles.optionRow}>
-            {[
-              { minutes: 30, label: '30 mins' },
-              { minutes: 60, label: '60 mins' },
-              { minutes: 90, label: '90 mins' },
-              { minutes: 120, label: '2 hours' }
-            ].map((goal) => {
-              const isSelected = dailyGoalMinutes === goal.minutes;
+          <View style={styles.languageRow}>
+            {[30, 45, 60, 90].map((mins) => {
+              const isSelected = dailyGoalMinutes === mins;
               return (
                 <TouchableOpacity
-                  key={goal.minutes}
-                  onPress={() => setDailyGoalMinutes(goal.minutes)}
+                  key={mins}
+                  onPress={() => setDailyGoalMinutes(mins)}
                   style={[
-                    styles.langChip,
+                    styles.langButton,
                     {
-                      minHeight: touchTarget.minTouchSize,
                       backgroundColor: isSelected ? theme.primary : theme.surface,
                       borderColor: isSelected ? theme.primary : theme.border,
-                      borderRadius: radii.md
-                    }
+                      borderRadius: radii.md,
+                      minHeight: touchTarget.minTouchSize,
+                    },
                   ]}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: isSelected }}
                 >
-                  <Text style={[styles.langChipText, { color: isSelected ? theme.textInverse : theme.text, fontSize: scaledFontSize('sm') }]}>
-                    {goal.label}
+                  <Text style={[styles.langText, { color: isSelected ? theme.textInverse : theme.text, fontSize: scaledFontSize('sm') }]}>
+                    {mins} mins
                   </Text>
                 </TouchableOpacity>
               );
@@ -220,26 +391,39 @@ export default function OnboardingScreen() {
           </View>
         </View>
 
-        {/* Proceed CTA */}
-        <View style={styles.ctaBox}>
-          <TouchableOpacity
-            onPress={handleContinue}
-            style={[
-              styles.continueBtn,
-              {
-                minHeight: touchTarget.minTouchSize,
-                backgroundColor: theme.primary,
-                borderRadius: radii.md
-              }
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel="Continue to account setup"
-          >
-            <Text style={[styles.continueBtnText, { color: theme.textInverse, fontSize: scaledFontSize('base') }]}>
-              Continue to Login
-            </Text>
-            <ArrowRight size={20} color={theme.textInverse} />
-          </TouchableOpacity>
+        {/* Action Button */}
+        <TouchableOpacity
+          onPress={handleSaveAndContinue}
+          disabled={saving}
+          style={[
+            styles.continueButton,
+            {
+              backgroundColor: theme.primary,
+              borderRadius: radii.md,
+              minHeight: touchTarget.minTouchSize,
+            },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Save profile and enter dashboard"
+        >
+          {saving ? (
+            <ActivityIndicator color={theme.textInverse} />
+          ) : (
+            <>
+              <Text style={[styles.continueButtonText, { color: theme.textInverse, fontSize: scaledFontSize('base') }]}>
+                Save Preferences & Enter Dashboard
+              </Text>
+              <ArrowRight size={20} color={theme.textInverse} style={{ marginLeft: 8 }} />
+            </>
+          )}
+        </TouchableOpacity>
+
+        {/* Security Disclosures */}
+        <View style={styles.securityBox}>
+          <ShieldCheck size={18} color={theme.verified} />
+          <Text style={[styles.securityText, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+            Preferences are saved directly to your authenticated candidate profile.
+          </Text>
         </View>
       </ScrollView>
     </View>
@@ -248,101 +432,147 @@ export default function OnboardingScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1
+    flex: 1,
   },
   scrollContent: {
     padding: 20,
-    paddingBottom: 40
   },
   header: {
-    marginBottom: 28
+    marginBottom: 20,
   },
   brandBadge: {
     fontWeight: '800',
     letterSpacing: 1.5,
-    marginBottom: 8
+    marginBottom: 6,
   },
   title: {
     fontWeight: '800',
-    lineHeight: 36,
-    marginBottom: 10
+    marginBottom: 6,
   },
   subtitle: {
-    lineHeight: 22
+    lineHeight: 20,
+  },
+  errorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  errorCardText: {
+    flex: 1,
+    fontWeight: '600',
+  },
+  sectionCard: {
+    padding: 16,
+    borderWidth: 1,
+    marginBottom: 20,
+    gap: 12,
+  },
+  fieldLabel: {
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    paddingHorizontal: 10,
+  },
+  input: {
+    flex: 1,
+    paddingVertical: 8,
+  },
+  singleNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  singleNameLabel: {
+    fontWeight: '600',
+  },
+  inputGroup: {
+    gap: 4,
   },
   section: {
-    marginBottom: 24
+    marginBottom: 20,
   },
   sectionTitle: {
     fontWeight: '700',
-    marginBottom: 4
+    marginBottom: 4,
   },
   sectionSubtitle: {
-    marginBottom: 14
+    lineHeight: 18,
+    marginBottom: 12,
   },
   examGrid: {
-    gap: 12
+    gap: 10,
   },
   examCard: {
-    padding: 16,
+    padding: 14,
     borderWidth: 1.5,
-    gap: 6
   },
   examCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center'
+    alignItems: 'center',
+    marginBottom: 6,
   },
   examBodyTag: {
     paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: 6
+    borderRadius: 6,
   },
   examBodyTagText: {
-    fontWeight: '700'
+    fontWeight: '700',
   },
   checkCircle: {
     width: 22,
     height: 22,
     borderRadius: 11,
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
   },
   examCardTitle: {
     fontWeight: '700',
-    marginTop: 2
+    marginBottom: 4,
   },
   examCardStatus: {
-    fontWeight: '500'
+    fontWeight: '500',
   },
-  optionRow: {
+  languageRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 10,
-    marginTop: 10
   },
-  langChip: {
+  langButton: {
     flex: 1,
-    minWidth: 90,
-    justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1.5,
-    paddingHorizontal: 12
+    justifyContent: 'center',
+    borderWidth: 1,
+    paddingVertical: 10,
   },
-  langChipText: {
-    fontWeight: '600'
+  langText: {
+    fontWeight: '600',
   },
-  ctaBox: {
-    marginTop: 16
-  },
-  continueBtn: {
+  continueButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingHorizontal: 20
+    paddingHorizontal: 20,
+    marginTop: 10,
   },
-  continueBtnText: {
-    fontWeight: '700'
-  }
+  continueButtonText: {
+    fontWeight: '700',
+  },
+  securityBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 20,
+  },
+  securityText: {
+    flex: 1,
+    lineHeight: 18,
+  },
 });

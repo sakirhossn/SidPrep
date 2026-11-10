@@ -107,12 +107,20 @@ export class AnswerSyncEngine {
       });
 
       // Mark successfully synced in SQLite using sequence-aware acks (F23)
-      const acks = (res.acknowledgedSequences && res.acknowledgedSequences.length > 0)
-        ? res.acknowledgedSequences
-        : (res.syncedQuestionIds || []).map((qId: string) => {
-            const match = syncPayload.find(p => p.questionId === qId);
-            return { questionId: qId, clientSequence: match?.clientSequence ?? Number.MAX_SAFE_INTEGER };
-          });
+      let acks: Array<{ questionId: string; clientSequence?: number }> = [];
+      if (Array.isArray(res.acknowledgedSequences)) {
+        acks = res.acknowledgedSequences;
+      } else if (res.acknowledgedSequences && typeof res.acknowledgedSequences === 'object') {
+        acks = Object.entries(res.acknowledgedSequences).map(([questionId, seq]) => ({
+          questionId,
+          clientSequence: Number(seq),
+        }));
+      } else if (res.syncedQuestionIds && res.syncedQuestionIds.length > 0) {
+        acks = res.syncedQuestionIds.map((qId: string) => {
+          const match = syncPayload.find(p => p.questionId === qId);
+          return { questionId: qId, clientSequence: match?.clientSequence ?? Number.MAX_SAFE_INTEGER };
+        });
+      }
 
       await sqliteDb.markAnswersSynced(attemptId, acks);
       this.setSyncState('SYNCED');

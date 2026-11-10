@@ -43,7 +43,7 @@ export default function MockRunnerScreen() {
         if (!mounted) return;
 
         setAttempt(res);
-        const expTime = new Date(res.expiresAt).getTime();
+        const expTime = res.expiresAt ? new Date(res.expiresAt).getTime() : Date.now() + (res.durationSeconds || 0) * 1000;
         const serverRemaining = Math.max(0, Math.floor((expTime - Date.now()) / 1000));
         setRemainingSeconds(serverRemaining || res.durationSeconds);
 
