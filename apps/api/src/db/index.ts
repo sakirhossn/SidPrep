@@ -219,11 +219,17 @@ export interface NewsDraftRecord {
   sourceName: string;
   sourceUrl: string;
   canonicalUrl?: string;
+  feedEntryId?: string;
+  originalPublisher?: string;
+  alternativeSourceUrls?: string[];
+  needsSourceReview?: boolean;
+  articleContent?: string;
+  publisherUsageRights?: 'OFFICIAL_GOVT' | 'PUBLIC_OPEN_ACCESS' | 'FAIR_DEALING_DISCOVERY' | 'REQUIRES_LICENSE';
   eventDate?: string;
   exclusionReason?: string;
   rejectionReason?: string;
   confidenceScore: number;
-  editorialStatus: 'FETCHED' | 'NORMALIZED' | 'DRAFT' | 'IN_REVIEW' | 'REVIEWED' | 'APPROVED' | 'SCHEDULED' | 'PUBLISHED' | 'REJECTED' | 'ARCHIVED';
+  editorialStatus: 'FETCHED' | 'NORMALIZED' | 'DRAFT' | 'NEEDS_SOURCE_REVIEW' | 'IN_REVIEW' | 'REVIEWED' | 'APPROVED' | 'SCHEDULED' | 'PUBLISHED' | 'REJECTED' | 'ARCHIVED';
   approvedBy?: string;
   approvalMode?: 'MANUAL' | 'AUTO_RULE';
   scheduledFor?: string;

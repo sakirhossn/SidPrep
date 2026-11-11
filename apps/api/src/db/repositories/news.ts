@@ -8,6 +8,16 @@ export interface NewsSourceRecord {
   feedUrl: string;
   isEnabled: boolean;
   category?: string;
+  sourceGroup?: string;
+  sourceType?: 'DIRECT_FEED' | 'GOOGLE_NEWS_DISCOVERY';
+  queryTemplate?: string;
+  queryKeywords?: string[];
+  publisherUsageRights?: 'OFFICIAL_GOVT' | 'PUBLIC_OPEN_ACCESS' | 'FAIR_DEALING_DISCOVERY' | 'REQUIRES_LICENSE';
+  isVerified?: boolean;
+  feedFormat?: string;
+  lastTestResult?: any;
+  lastTestedAt?: string;
+  priorityTier?: number;
   lastFetchedAt?: string;
   createdAt?: string;
 }
@@ -15,7 +25,7 @@ export interface NewsSourceRecord {
 export class NewsSourceRepository extends BaseRepository<NewsSourceRecord> {
   public async loadFromDb(): Promise<void> {
     try {
-      const res = await query<any>('SELECT * FROM current_affairs_sources');
+      const res = await query<any>('SELECT * FROM news_sources');
       this.cache = Object.create(null);
       for (const row of res.rows) {
         const source: NewsSourceRecord = {
@@ -23,6 +33,19 @@ export class NewsSourceRepository extends BaseRepository<NewsSourceRecord> {
           name: row.name,
           feedUrl: row.feed_url,
           isEnabled: Boolean(row.is_enabled),
+          category: row.category,
+          sourceGroup: row.source_group || 'national_governance',
+          sourceType: row.source_type || 'DIRECT_FEED',
+          queryTemplate: row.query_template,
+          queryKeywords: Array.isArray(row.query_keywords) ? row.query_keywords : [],
+          publisherUsageRights: row.publisher_usage_rights || 'FAIR_DEALING_DISCOVERY',
+          isVerified: Boolean(row.is_verified),
+          feedFormat: row.feed_format || 'RSS_2_0',
+          lastTestResult: row.last_test_result,
+          lastTestedAt: row.last_tested_at ? new Date(row.last_tested_at).toISOString() : undefined,
+          priorityTier: row.priority_tier || 2,
+          lastFetchedAt: row.last_fetched_at ? new Date(row.last_fetched_at).toISOString() : undefined,
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
         };
         this.cache[source.id] = source;
       }
@@ -34,23 +57,53 @@ export class NewsSourceRepository extends BaseRepository<NewsSourceRecord> {
 
   public async persistInsertOrUpdate(record: NewsSourceRecord): Promise<void> {
     await query(
-      `INSERT INTO current_affairs_sources (
-        id, name, feed_url, is_enabled, created_at
-      ) VALUES ($1, $2, $3, $4, NOW())
+      `INSERT INTO news_sources (
+        id, name, feed_url, is_enabled, category, source_group, source_type,
+        query_template, query_keywords, publisher_usage_rights, is_verified, feed_format,
+        last_test_result, last_tested_at, priority_tier, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         feed_url = EXCLUDED.feed_url,
-        is_enabled = EXCLUDED.is_enabled`,
-      [record.id, record.name, record.feedUrl, record.isEnabled]
+        is_enabled = EXCLUDED.is_enabled,
+        category = EXCLUDED.category,
+        source_group = EXCLUDED.source_group,
+        source_type = EXCLUDED.source_type,
+        query_template = EXCLUDED.query_template,
+        query_keywords = EXCLUDED.query_keywords,
+        publisher_usage_rights = EXCLUDED.publisher_usage_rights,
+        is_verified = EXCLUDED.is_verified,
+        feed_format = EXCLUDED.feed_format,
+        last_test_result = EXCLUDED.last_test_result,
+        last_tested_at = EXCLUDED.last_tested_at,
+        priority_tier = EXCLUDED.priority_tier,
+        updated_at = NOW()`,
+      [
+        record.id,
+        record.name,
+        record.feedUrl,
+        record.isEnabled,
+        record.category || 'National',
+        record.sourceGroup || 'national_governance',
+        record.sourceType || 'DIRECT_FEED',
+        record.queryTemplate || null,
+        record.queryKeywords || [],
+        record.publisherUsageRights || 'FAIR_DEALING_DISCOVERY',
+        record.isVerified || false,
+        record.feedFormat || 'RSS_2_0',
+        record.lastTestResult ? JSON.stringify(record.lastTestResult) : null,
+        record.lastTestedAt || null,
+        record.priorityTier || 2,
+      ]
     );
   }
 
   public async persistDelete(id: string): Promise<void> {
-    await query('DELETE FROM current_affairs_sources WHERE id = $1', [id]);
+    await query('DELETE FROM news_sources WHERE id = $1', [id]);
   }
 
   public async persistClear(): Promise<void> {
-    await query('DELETE FROM current_affairs_sources');
+    await query('DELETE FROM news_sources');
   }
 }
 
@@ -76,6 +129,12 @@ export class NewsDraftRepository extends BaseRepository<NewsDraftRecord> {
           sourceName: row.source_name,
           sourceUrl: row.source_url,
           canonicalUrl: row.canonical_url || row.source_url,
+          feedEntryId: row.feed_entry_id || undefined,
+          originalPublisher: row.original_publisher || undefined,
+          alternativeSourceUrls: Array.isArray(row.alternative_source_urls) ? row.alternative_source_urls : [],
+          needsSourceReview: Boolean(row.needs_source_review),
+          articleContent: row.article_content || undefined,
+          publisherUsageRights: row.publisher_usage_rights || 'FAIR_DEALING_DISCOVERY',
           eventDate: row.event_date ? new Date(row.event_date).toISOString().split('T')[0] : undefined,
           exclusionReason: row.exclusion_reason || undefined,
           rejectionReason: row.rejection_reason || undefined,
@@ -102,8 +161,10 @@ export class NewsDraftRepository extends BaseRepository<NewsDraftRecord> {
         id, candidate_id, title, original_summary, category, target_exams, key_facts,
         why_it_matters, static_gk_background, practice_mcqs, event_date, canonical_url,
         exclusion_reason, rejection_reason, source_name, source_url, confidence_score,
-        editorial_status, approved_by, approval_mode, scheduled_for, published_at, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW())
+        editorial_status, approved_by, approval_mode, scheduled_for, published_at,
+        feed_entry_id, original_publisher, alternative_source_urls, needs_source_review, article_content, publisher_usage_rights,
+        created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, NOW(), NOW())
       ON CONFLICT (id) DO UPDATE SET
         candidate_id = EXCLUDED.candidate_id,
         title = EXCLUDED.title,
@@ -126,6 +187,12 @@ export class NewsDraftRepository extends BaseRepository<NewsDraftRecord> {
         approval_mode = EXCLUDED.approval_mode,
         scheduled_for = EXCLUDED.scheduled_for,
         published_at = EXCLUDED.published_at,
+        feed_entry_id = EXCLUDED.feed_entry_id,
+        original_publisher = EXCLUDED.original_publisher,
+        alternative_source_urls = EXCLUDED.alternative_source_urls,
+        needs_source_review = EXCLUDED.needs_source_review,
+        article_content = EXCLUDED.article_content,
+        publisher_usage_rights = EXCLUDED.publisher_usage_rights,
         updated_at = NOW()`,
       [
         record.id,
@@ -150,7 +217,12 @@ export class NewsDraftRepository extends BaseRepository<NewsDraftRecord> {
         record.approvalMode || null,
         record.scheduledFor || null,
         record.publishedAt || null,
-        record.createdAt,
+        record.feedEntryId || null,
+        record.originalPublisher || null,
+        record.alternativeSourceUrls || [],
+        record.needsSourceReview || false,
+        record.articleContent || null,
+        record.publisherUsageRights || 'FAIR_DEALING_DISCOVERY',
       ]
     );
   }

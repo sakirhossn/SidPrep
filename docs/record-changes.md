@@ -3279,3 +3279,87 @@ To serve competitive exam aspirants (SSC, RRB, WBPSC, IBPS, and state exams), cu
 - Full API Test Suite: **131/131 passed** across 26 test suites.
 - Next.js Web Production Build: **39/39 routes compiled successfully** (0 errors).
 - Mobile Type Check (`tsc --noEmit`): **0 errors**.
+
+---
+
+## 23. DailyDigest Ingestion Adaptation, Bounded Concurrency, Multi-Script Deduplication, and Source Diagnostics
+
+### 23.1. Context & Objectives
+To achieve high reliability and comprehensive syllabus coverage across competitive exams (SSC, RRB, WBPSC, IBPS), SidPrep adapted proven architecture patterns from [DailyDigest](https://github.com/sakirhossn/DailyDigest) (Python) into SidPrep's existing TypeScript/Fastify/PostgreSQL stack without introducing an external Python service.
+
+Key objectives:
+1. **Source Strategy**: Implement 9 editable source groups spanning National Governance, Banking, Defence/Science, International, Sports, Awards, Environment, Important Days, and West Bengal affairs, combining direct publisher feeds with topic-based Google News RSS discovery.
+2. **Robust Google News Freshness**: Wrap keyword queries in parentheses before the `when:1d` directive with Indian English locale parameters (`hl=en-IN&gl=IN&ceid=IN:en`).
+3. **Bounded Concurrency & Fault Isolation**: Bounded network fetching (6 simultaneous requests) with 10-second timeouts, per-source exception isolation, and content-type verification (detecting HTML 403/Cloudflare challenge pages).
+4. **Unicode Tokenization & Clustering**: Handle English, Bengali, and Hindi scripts using Unicode `\p{L}\p{N}` regex and 0.65 Jaccard similarity, guarded by domain-specific anti-false-positive checks (appointments, report editions, sports categories, corrigenda).
+5. **No Hallucinated Facts Invariant**: Retrieve safe article body for short feed summaries (< 40 words); mark drafts with insufficient facts as `NEEDS_SOURCE_REVIEW` rather than generating filler.
+6. **Unified Source Diagnostics**: Provide a single production test utility returning HTTP status, final URL, detected format, 3 sample headlines, and error diagnostics for both Admin UI and automated health checks.
+
+### 23.2. Before vs After Comparison
+
+| Component | Before Adaptation | After Adaptation |
+| :--- | :--- | :--- |
+| **Source Management** | Single flat source list; URLs marked verified without connectivity proof. | 9 categorized source groups; direct feeds vs Google News discovery toggles; candidate sources default to unverified until tested. |
+| **Google News Query** | Unparenthesized query string prone to stale keyword matching. | Grouped queries `(keywords) when:1d&hl=en-IN&gl=IN&ceid=IN:en` ensuring freshness applies to all keywords. |
+| **Feed Diagnostics** | Generic success/error alerts in Admin UI without actionable data. | Modal displaying HTTP status code, final URL, detected format, sample headlines, and detailed error messages. |
+| **Headline Clustering** | ASCII-only substring checking; risk of false merges between distinct appointments. | Unicode tokenization across English, Hindi, Bengali + anti-false-positive guards for appointments, report editions, and sports. |
+| **Concurrency & Leases** | Unbounded serial or uncontrolled concurrent requests. | Bounded concurrency (6 simultaneous workers) with 10s timeout, SSRF protection, and 2MB payload limits. |
+| **Short Description Curation** | Kept brief summaries or hallucinated generic facts. | Safe article retrieval for summaries < 40 words; flags `NEEDS_SOURCE_REVIEW` when < 3 verifiable facts exist. |
+
+### 23.3. Changes Made
+
+#### 1. Database Migrations
+- `apps/api/migrations/1715000000013_dailydigest_source_strategy.sql`:
+  - `news_sources`: Added `source_group`, `source_type` (`DIRECT_FEED` / `GOOGLE_NEWS_DISCOVERY`), `query_template`, `query_keywords`, `publisher_usage_rights`, `is_verified`, `feed_format`, `last_test_result`, `last_tested_at`, `priority_tier`.
+  - `news_articles` & `news_drafts`: Added `feed_entry_id`, `original_publisher`, `alternative_source_urls`, `needs_source_review`, `article_content`, `publisher_usage_rights`.
+  - `news_fetch_jobs`: Added `items_review_needed`, `source_group`.
+  - Added indexes on `news_sources(source_group)`, `news_sources(source_type)`, and `news_drafts(needs_source_review)`.
+
+#### 2. Services & Repository Layer
+- `apps/api/src/services/newsIngestion.ts`:
+  - Defined 9 `SOURCE_GROUPS` and candidate seed sources.
+  - Implemented `buildGoogleNewsDiscoveryUrl()`.
+  - Implemented `cleanHtml()`, `tokenizeHeadlineUnicode()`, `calculateHeadlineSimilarity()`, `areTitlesSimilar()`, and `shouldProhibitHeadlineMerge()`.
+  - Implemented `detectFeedFormat()` recognizing `RSS_2_0`, `ATOM_1_0`, `RSS_1_0`, and `INVALID_HTML`.
+  - Implemented `retrieveArticleContentIfShort()` with SSRF protection and 2MB size cap.
+  - Implemented `mapConcurrent()` with bounded concurrency of 6 workers.
+  - Implemented unified `testFeedConnectivity()` with PostgreSQL persistence.
+  - Updated `executeNewsFetchJob()` tracking itemized metrics (`itemsFetched`, `itemsNew`, `itemsDuplicate`, `itemsRejected`, `itemsReviewNeeded`, `itemsFailed`).
+- `apps/api/src/db/repositories/news.ts`:
+  - Extended `NewsSourceRecord` and `NewsDraftRecord` to load and persist all new fields.
+
+#### 3. Backend API Endpoints (`apps/api/src/modules/news/index.ts`)
+- Added `NEEDS_SOURCE_REVIEW` to `ALLOWED_STATUS_TRANSITIONS`.
+- `GET /v1/admin/news/source-groups`: Lists the 9 standard source groups with metadata.
+- `GET /v1/admin/news/sources`: Added `sourceGroup` filtering and auto-seeding of candidate sources.
+- `POST /v1/admin/news/sources`: Validates and creates sources with Google News templates and usage rights.
+- `PATCH /v1/admin/news/sources/:id`: Updates source settings, query template, priority tier, and active status.
+- `POST /v1/admin/news/sources/:id/test`: Runs live connectivity test and stores diagnostics in DB.
+- `POST /v1/admin/news/fetch-now`: Supports on-demand fetching by `sourceId` or `sourceGroup`.
+- `GET /v1/admin/news/drafts`: Added `needsSourceReview` filter.
+
+#### 4. Web Admin Console (`apps/web/src/app/admin/current-affairs/page.tsx`)
+- Source Group navigation tabs (`All Groups` + 9 specific topic groups).
+- Sources table showing `sourceGroup`, `sourceType` pill (`Direct Feed` vs `GNews Discovery`), `publisherUsageRights` badge, and verification status.
+- Connectivity Diagnostics Modal displaying HTTP status, final URL, detected format, 3 sample headlines, and error notes.
+- "Add Source" modal supporting both Direct Feed and Google News Discovery queries with query syntax guidance.
+- "Needs Source Review Only" filter toggle with amber warning badge in the drafts review queue.
+
+### 23.4. Verification Results
+
+#### Automated Test Suites:
+- `apps/api/src/test/dailydigest-adaptation.test.ts`: **10/10 passed** (0 failures).
+  - RSS 2.0 & Atom 1.0 parsing, Google News query encoding, HTML sanitization, Unicode tokenization (English, Hindi, Bengali), anti-false-positive clustering guards, HTML error page handling, freshness window filtering, bounded concurrency (6 workers), `NEEDS_SOURCE_REVIEW` handling, and Admin API source groups.
+- Full API Test Suite: **141/141 passed** across 27 test suites.
+- Next.js Web Production Build: **39/39 routes compiled successfully** (0 errors).
+- Mobile Type Check (`tsc --noEmit`): **0 errors**.
+
+#### Empirical Live Source Test Results (Reported Separately):
+- **Press Information Bureau (PIB)**: HTTP 403 (Cloudflare/server-level bot block on direct crawler User-Agent; verified that candidate must not be marked verified without testing).
+- **Reserve Bank of India (RBI)**: HTTP 200 (RSS_2_0, 6 items, 350ms–502ms).
+- **DD News National**: Fetch failed (Connection refused / SSL mismatch).
+- **The Hindu National News**: HTTP 200 (RSS_2_0, 10 items, 75ms).
+- **Google News Discovery (National & Governance)**: HTTP 200 (RSS_2_0, 5 items, 891ms).
+- **Google News Discovery (Defence & Science)**: HTTP 200 (RSS_2_0, 94 items, 446ms).
+- **Google News Discovery (Sports)**: HTTP 200 (RSS_2_0, 95 items, 807ms).
+

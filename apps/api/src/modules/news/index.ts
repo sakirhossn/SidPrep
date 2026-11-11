@@ -4,11 +4,18 @@ import { db, NewsDraftRecord } from '../../db/index.js';
 import { query } from '../../db/pool.js';
 import { isSafePublicUrl } from '../../lib/security.js';
 import { requireAdminAuth } from '../../lib/adminAuth.js';
-import { executeNewsFetchJob, testFeedConnectivity } from '../../services/newsIngestion.js';
+import {
+  executeNewsFetchJob,
+  testFeedConnectivity,
+  SOURCE_GROUPS,
+  DEFAULT_CANDIDATE_SOURCES,
+  buildGoogleNewsDiscoveryUrl,
+} from '../../services/newsIngestion.js';
 
 const ALLOWED_STATUS_TRANSITIONS: Record<string, string[]> = {
-  DRAFT: ['IN_REVIEW', 'REVIEWED', 'APPROVED', 'REJECTED', 'ARCHIVED'],
-  IN_REVIEW: ['REVIEWED', 'REJECTED', 'ARCHIVED', 'DRAFT'],
+  DRAFT: ['IN_REVIEW', 'REVIEWED', 'APPROVED', 'REJECTED', 'ARCHIVED', 'NEEDS_SOURCE_REVIEW'],
+  NEEDS_SOURCE_REVIEW: ['DRAFT', 'IN_REVIEW', 'REVIEWED', 'REJECTED', 'ARCHIVED'],
+  IN_REVIEW: ['REVIEWED', 'REJECTED', 'ARCHIVED', 'DRAFT', 'NEEDS_SOURCE_REVIEW'],
   REVIEWED: ['APPROVED', 'REJECTED', 'ARCHIVED', 'DRAFT'],
   APPROVED: ['SCHEDULED', 'PUBLISHED', 'ARCHIVED', 'DRAFT'],
   SCHEDULED: ['PUBLISHED', 'APPROVED', 'ARCHIVED', 'DRAFT'],
@@ -381,19 +388,23 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * POST /admin/news/fetch-now
-   * Admin triggers real on-demand ingestion across active official feeds
+   * Admin triggers real on-demand ingestion across active official feeds or specific source/group
    */
   fastify.post(
     '/admin/news/fetch-now',
     { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER', 'CA_EDITOR'])] },
     async (request, reply) => {
       const admin = request.admin!;
-      const { sourceId } = (request.body as { sourceId?: string }) || {};
+      const { sourceId, sourceGroup, maxAgeHours } = (request.body as { sourceId?: string; sourceGroup?: string; maxAgeHours?: number }) || {};
 
       const result = await executeNewsFetchJob({
         sourceId,
+        sourceGroup,
         adminId: admin.id,
         workerId: `manual_${admin.id}`,
+        maxConcurrency: 6,
+        timeoutMs: 10000,
+        maxAgeHours: maxAgeHours || 72,
       });
 
       db.logAudit({
@@ -405,17 +416,19 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
         targetId: result.jobId,
         changesDiff: {
           status: result.status,
+          sourceGroup: result.sourceGroup,
           itemsFetched: result.itemsFetched,
           itemsNew: result.itemsNew,
           itemsDuplicate: result.itemsDuplicate,
           itemsRejected: result.itemsRejected,
+          itemsReviewNeeded: result.itemsReviewNeeded,
         },
         ipAddress: request.ip,
       });
 
       return reply.send({
         success: true,
-        message: `News ingestion completed. ${result.itemsNew} new items drafted for editorial review. ${result.itemsRejected} non-exam items filtered out.`,
+        message: `News ingestion completed. ${result.itemsNew} new items drafted (${result.itemsReviewNeeded} need source review). ${result.itemsRejected} non-exam items filtered out.`,
         ...result,
         newDraftCount: result.itemsNew,
         mode: 'MANUAL_APPROVAL',
@@ -436,7 +449,7 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
           `SELECT j.*, s.name as source_name 
            FROM news_fetch_jobs j 
            LEFT JOIN news_sources s ON j.source_id = s.id 
-           ORDER BY j.created_at DESC LIMIT 25`
+           ORDER BY j.created_at DESC LIMIT 30`
         );
         return reply.send({ success: true, data: res.rows });
       } catch (err: any) {
@@ -446,42 +459,103 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   /**
+   * GET /admin/news/source-groups
+   * List the 9 standard competitive exam source groups
+   */
+  fastify.get(
+    '/admin/news/source-groups',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER', 'CA_EDITOR', 'AUDITOR'])] },
+    async (_request, reply) => {
+      return reply.send({ success: true, data: SOURCE_GROUPS });
+    }
+  );
+
+  /**
    * GET /admin/news/sources
-   * List configured news sources with health status
+   * List configured news sources with health status, source group, and test history
    */
   fastify.get(
     '/admin/news/sources',
     { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER', 'CA_EDITOR', 'AUDITOR'])] },
-    async (_request, reply) => {
+    async (request, reply) => {
+      const { sourceGroup } = (request.query as { sourceGroup?: string }) || {};
+
       try {
-        const res = await query('SELECT * FROM news_sources ORDER BY created_at ASC');
+        let queryStr = 'SELECT * FROM news_sources';
+        const params: any[] = [];
+        if (sourceGroup && sourceGroup !== 'ALL') {
+          queryStr += ' WHERE source_group = $1';
+          params.push(sourceGroup);
+        }
+        queryStr += ' ORDER BY priority_tier ASC, created_at ASC';
+        const res = await query(queryStr, params);
+
         if (res.rows.length > 0) {
           return reply.send({ success: true, data: res.rows });
         }
+
+        // Auto-seed DEFAULT_CANDIDATE_SOURCES if table is empty
+        for (const cand of DEFAULT_CANDIDATE_SOURCES) {
+          await query(
+            `INSERT INTO news_sources (
+              id, name, feed_url, source_group, source_type, query_template, query_keywords,
+              category, language, fetch_interval_minutes, priority_tier, is_verified,
+              publisher_usage_rights, is_enabled
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            ON CONFLICT (id) DO NOTHING`,
+            [
+              cand.id,
+              cand.name,
+              cand.feed_url,
+              cand.source_group,
+              cand.source_type,
+              (cand as any).query_template || null,
+              (cand as any).query_keywords || [],
+              cand.category,
+              cand.language,
+              cand.fetch_interval_minutes,
+              cand.priority_tier,
+              cand.is_verified,
+              cand.publisher_usage_rights,
+              cand.is_enabled,
+            ]
+          );
+        }
+        const seededRes = await query('SELECT * FROM news_sources ORDER BY priority_tier ASC, created_at ASC');
+        return reply.send({ success: true, data: seededRes.rows });
       } catch {
-        // Fallback to memory
+        // Memory fallback
+        let mem = Array.from(db.newsSources.values());
+        if (mem.length === 0) {
+          for (const cand of DEFAULT_CANDIDATE_SOURCES) {
+            db.newsSources.setLocal(cand.id, {
+              id: cand.id,
+              name: cand.name,
+              feedUrl: cand.feed_url,
+              isEnabled: cand.is_enabled,
+              category: cand.category,
+              sourceGroup: cand.source_group,
+              sourceType: cand.source_type as any,
+              queryTemplate: (cand as any).query_template,
+              queryKeywords: (cand as any).query_keywords,
+              publisherUsageRights: cand.publisher_usage_rights as any,
+              isVerified: cand.is_verified,
+              priorityTier: cand.priority_tier,
+            });
+          }
+          mem = Array.from(db.newsSources.values());
+        }
+        if (sourceGroup && sourceGroup !== 'ALL') {
+          mem = mem.filter((s) => s.sourceGroup === sourceGroup);
+        }
+        return reply.send({ success: true, data: mem });
       }
-
-      const sources = Array.from(db.newsSources.values()).map((s) => ({
-        id: s.id,
-        name: s.name,
-        feed_url: s.feedUrl,
-        is_enabled: s.isEnabled,
-        category: s.category || 'National',
-        language: 'en',
-        fetch_interval_minutes: 60,
-        parser_type: 'rss',
-        health_status: 'HEALTHY',
-        last_fetched_at: s.lastFetchedAt,
-      }));
-
-      return reply.send({ success: true, data: sources });
     }
   );
 
   /**
    * POST /admin/news/sources
-   * Add a new news source
+   * Add a new news source or Google News topic discovery feed
    */
   fastify.post(
     '/admin/news/sources',
@@ -490,26 +564,32 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
       const admin = request.admin!;
       const body = request.body as any;
 
-      if (!body.name || !body.feedUrl) {
+      if (!body.name) {
         return reply.code(400).send({
           success: false,
-          error: { code: 'VALIDATION_ERROR', message: 'Source name and feedUrl are required.' },
+          error: { code: 'VALIDATION_ERROR', message: 'Source name is required.' },
         });
       }
 
-      if (!isSafePublicUrl(body.feedUrl)) {
+      const sourceType = body.sourceType || 'DIRECT_FEED';
+      let feedUrl = (body.feedUrl || '').trim();
+
+      // If Google News Discovery and queryTemplate given, build URL automatically
+      if (sourceType === 'GOOGLE_NEWS_DISCOVERY' && body.queryTemplate) {
+        feedUrl = buildGoogleNewsDiscoveryUrl(body.queryTemplate);
+      }
+
+      if (!feedUrl) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: 'feedUrl or queryTemplate is required.' },
+        });
+      }
+
+      if (!isSafePublicUrl(feedUrl)) {
         return reply.code(400).send({
           success: false,
           error: { code: 'SSRF_BLOCKED', message: 'Feed URL must be a public HTTP/HTTPS endpoint.' },
-        });
-      }
-
-      const normalizedFeedUrl = body.feedUrl.trim();
-      const existing = Array.from(db.newsSources.values()).find((s) => s.feedUrl === normalizedFeedUrl);
-      if (existing) {
-        return reply.code(409).send({
-          success: false,
-          error: { code: 'DUPLICATE_FEED_URL', message: 'A news source with this feed URL is already registered.' },
         });
       }
 
@@ -517,52 +597,61 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
       const newSource = {
         id: sourceId,
         name: body.name.trim(),
-        feedUrl: normalizedFeedUrl,
+        feedUrl,
         isEnabled: body.isEnabled !== undefined ? Boolean(body.isEnabled) : true,
-        category: body.category || 'National',
+        category: body.category || 'Government Schemes',
+        sourceGroup: body.sourceGroup || 'national_governance',
+        sourceType,
+        queryTemplate: body.queryTemplate || null,
+        queryKeywords: Array.isArray(body.queryKeywords) ? body.queryKeywords : [],
+        publisherUsageRights: body.publisherUsageRights || 'FAIR_DEALING_DISCOVERY',
+        priorityTier: Number(body.priorityTier) || 2,
         language: body.language || 'en',
-        fetchIntervalMinutes: Number(body.fetchIntervalMinutes) || 60,
+        fetchIntervalMinutes: Number(body.fetchIntervalMinutes) || 120,
         parserType: body.parserType || 'rss',
+        isVerified: Boolean(body.isVerified) || false,
       };
 
       try {
         await query(
-          `INSERT INTO news_sources (id, name, feed_url, is_enabled, category, language, fetch_interval_minutes, parser_type, health_status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'HEALTHY')
-           ON CONFLICT (id) DO NOTHING`,
+          `INSERT INTO news_sources (
+            id, name, feed_url, is_enabled, category, source_group, source_type,
+            query_template, query_keywords, publisher_usage_rights, priority_tier,
+            language, fetch_interval_minutes, parser_type, is_verified, health_status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'HEALTHY')
+          ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            feed_url = EXCLUDED.feed_url,
+            is_enabled = EXCLUDED.is_enabled,
+            source_group = EXCLUDED.source_group,
+            source_type = EXCLUDED.source_type,
+            query_template = EXCLUDED.query_template,
+            query_keywords = EXCLUDED.query_keywords,
+            publisher_usage_rights = EXCLUDED.publisher_usage_rights,
+            priority_tier = EXCLUDED.priority_tier`,
           [
             newSource.id,
             newSource.name,
             newSource.feedUrl,
             newSource.isEnabled,
             newSource.category,
+            newSource.sourceGroup,
+            newSource.sourceType,
+            newSource.queryTemplate,
+            newSource.queryKeywords,
+            newSource.publisherUsageRights,
+            newSource.priorityTier,
             newSource.language,
             newSource.fetchIntervalMinutes,
             newSource.parserType,
+            newSource.isVerified,
           ]
         );
       } catch (err: any) {
         console.warn('[News] Insert source fallback:', err.message);
       }
 
-      try {
-        await db.newsSources.set(sourceId, {
-          id: sourceId,
-          name: newSource.name,
-          feedUrl: newSource.feedUrl,
-          category: newSource.category,
-          isEnabled: newSource.isEnabled,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (err: any) {
-        if (err.code === '23505') {
-          return reply.code(409).send({
-            success: false,
-            error: { code: 'DUPLICATE_FEED_URL', message: 'A news source with this feed URL is already registered.' },
-          });
-        }
-        throw err;
-      }
+      await db.newsSources.set(sourceId, newSource);
 
       db.logAudit({
         actorId: admin.id,
@@ -571,21 +660,109 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
         module: 'NEWS_SOURCES',
         action: 'CREATE_SOURCE',
         targetId: sourceId,
-        changesDiff: { name: newSource.name, feedUrl: newSource.feedUrl },
+        changesDiff: { name: newSource.name, feedUrl: newSource.feedUrl, sourceGroup: newSource.sourceGroup },
         ipAddress: request.ip,
       });
 
       return reply.code(201).send({
         success: true,
-        message: 'News source added successfully.',
+        message: 'News source configured successfully.',
         data: newSource,
       });
     }
   );
 
   /**
+   * PATCH /admin/news/sources/:id
+   * Edit news source settings, group, keywords, or usage permissions
+   */
+  fastify.patch(
+    '/admin/news/sources/:id',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER', 'CA_EDITOR'])] },
+    async (request, reply) => {
+      const admin = request.admin!;
+      const { id } = request.params as { id: string };
+      const body = request.body as any;
+
+      let feedUrl = body.feedUrl ? String(body.feedUrl).trim() : undefined;
+      const sourceType = body.sourceType;
+      const queryTemplate = body.queryTemplate;
+
+      if (sourceType === 'GOOGLE_NEWS_DISCOVERY' && queryTemplate) {
+        feedUrl = buildGoogleNewsDiscoveryUrl(queryTemplate);
+      }
+
+      if (feedUrl && !isSafePublicUrl(feedUrl)) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'SSRF_BLOCKED', message: 'Feed URL must be a public HTTP/HTTPS endpoint.' },
+        });
+      }
+
+      try {
+        await query(
+          `UPDATE news_sources
+           SET name = COALESCE($1, name),
+               feed_url = COALESCE($2, feed_url),
+               is_enabled = COALESCE($3, is_enabled),
+               category = COALESCE($4, category),
+               source_group = COALESCE($5, source_group),
+               source_type = COALESCE($6, source_type),
+               query_template = COALESCE($7, query_template),
+               query_keywords = COALESCE($8, query_keywords),
+               publisher_usage_rights = COALESCE($9, publisher_usage_rights),
+               priority_tier = COALESCE($10, priority_tier),
+               updated_at = NOW()
+           WHERE id = $11`,
+          [
+            body.name ? String(body.name).trim() : null,
+            feedUrl || null,
+            body.isEnabled !== undefined ? Boolean(body.isEnabled) : null,
+            body.category || null,
+            body.sourceGroup || null,
+            sourceType || null,
+            queryTemplate || null,
+            Array.isArray(body.queryKeywords) ? body.queryKeywords : null,
+            body.publisherUsageRights || null,
+            body.priorityTier !== undefined ? Number(body.priorityTier) : null,
+            id,
+          ]
+        );
+      } catch (err: any) {
+        console.warn('[News] Update source fallback:', err.message);
+      }
+
+      const updated = db.newsSources.get(id);
+      if (updated) {
+        if (body.name) updated.name = body.name;
+        if (feedUrl) updated.feedUrl = feedUrl;
+        if (body.isEnabled !== undefined) updated.isEnabled = body.isEnabled;
+        if (body.category) updated.category = body.category;
+        if (body.sourceGroup) updated.sourceGroup = body.sourceGroup;
+        if (sourceType) updated.sourceType = sourceType;
+        if (queryTemplate) updated.queryTemplate = queryTemplate;
+        if (body.publisherUsageRights) updated.publisherUsageRights = body.publisherUsageRights;
+        await db.newsSources.set(id, updated);
+      }
+
+      db.logAudit({
+        actorId: admin.id,
+        actorEmail: admin.email,
+        actorRole: admin.role,
+        module: 'NEWS_SOURCES',
+        action: 'UPDATE_SOURCE',
+        targetId: id,
+        changesDiff: body,
+        ipAddress: request.ip,
+      });
+
+      return reply.send({ success: true, message: 'News source updated successfully.' });
+    }
+  );
+
+  /**
    * POST /admin/news/sources/:id/test
-   * Test feed connectivity and preview items without saving
+   * Test feed connectivity and return comprehensive diagnostics (HTTP status, final URL, detected format, 3 sample entries, failure states)
    */
   fastify.post(
     '/admin/news/sources/:id/test',
@@ -593,10 +770,16 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const { id } = request.params as { id: string };
       let feedUrl: string | undefined;
+      let sourceType: string | undefined;
+      let queryTemplate: string | undefined;
 
       try {
-        const res = await query('SELECT feed_url FROM news_sources WHERE id = $1', [id]);
-        if (res.rows.length > 0) feedUrl = res.rows[0].feed_url;
+        const res = await query('SELECT feed_url, source_type, query_template FROM news_sources WHERE id = $1', [id]);
+        if (res.rows.length > 0) {
+          feedUrl = res.rows[0].feed_url;
+          sourceType = res.rows[0].source_type;
+          queryTemplate = res.rows[0].query_template;
+        }
       } catch {
         // Fallback
       }
@@ -604,6 +787,12 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!feedUrl) {
         const memSource = db.newsSources.get(id);
         feedUrl = memSource?.feedUrl;
+        sourceType = memSource?.sourceType;
+        queryTemplate = memSource?.queryTemplate;
+      }
+
+      if (sourceType === 'GOOGLE_NEWS_DISCOVERY' && queryTemplate) {
+        feedUrl = buildGoogleNewsDiscoveryUrl(queryTemplate);
       }
 
       if (!feedUrl) {
@@ -613,7 +802,7 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const testResult = await testFeedConnectivity(feedUrl);
+      const testResult = await testFeedConnectivity(feedUrl, id);
       return reply.send({
         success: testResult.success,
         data: testResult,
@@ -859,13 +1048,35 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * GET /admin/news/drafts
-   * List all drafts for editorial review console
+   * List drafts for editorial review console with optional filtering
    */
   fastify.get(
     '/admin/news/drafts',
     { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER', 'CA_EDITOR', 'REVIEWER', 'SUPPORT'])] },
-    async (_request, reply) => {
-      const drafts = Array.from(db.newsDrafts.values());
+    async (request, reply) => {
+      const { status, exam, category, needsSourceReview } = request.query as {
+        status?: string;
+        exam?: string;
+        category?: string;
+        needsSourceReview?: string;
+      };
+
+      let drafts = Array.from(db.newsDrafts.values());
+
+      if (status && status !== 'ALL') {
+        drafts = drafts.filter((d) => d.editorialStatus === status);
+      }
+      if (exam && exam !== 'ALL') {
+        drafts = drafts.filter((d) => isExamMatched(d.targetExams, exam));
+      }
+      if (category && category !== 'ALL') {
+        drafts = drafts.filter((d) => d.category === category);
+      }
+      if (needsSourceReview !== undefined) {
+        const flag = needsSourceReview === 'true';
+        drafts = drafts.filter((d) => Boolean(d.needsSourceReview) === flag);
+      }
+
       drafts.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
       return reply.send(drafts);
     }
