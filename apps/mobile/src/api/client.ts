@@ -269,10 +269,85 @@ export class SidPrepApiClient {
       method: 'POST',
       body: JSON.stringify(data)
     });
-    await secureStorage.saveTokens(res.tokens.accessToken, res.tokens.refreshToken);
-    await secureStorage.saveUserProfile(JSON.stringify(res.user));
-    telemetry.setAnonymousUserId(res.user.id);
+    if (res.tokens) {
+      await secureStorage.saveTokens(res.tokens.accessToken, res.tokens.refreshToken);
+    }
+    if (res.user) {
+      await secureStorage.saveUserProfile(JSON.stringify(res.user));
+      telemetry.setAnonymousUserId(res.user.id);
+    }
     return res;
+  }
+
+  async loginWithPassword(email: string, password: string): Promise<any> {
+    const res = await this.request<any>('/auth/student/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim().toLowerCase(), password, deviceInfo: { platform: 'app' } })
+    });
+    if (res.accessToken) {
+      await secureStorage.saveTokens(res.accessToken, res.refreshToken);
+      if (res.user) {
+        await secureStorage.saveUserProfile(JSON.stringify(res.user));
+        telemetry.setAnonymousUserId(res.user.id);
+      }
+    }
+    return res;
+  }
+
+  async registerWithPassword(data: any): Promise<any> {
+    const res = await this.request<any>('/auth/student/register', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+    if (res.accessToken) {
+      await secureStorage.saveTokens(res.accessToken, res.refreshToken);
+      if (res.user) {
+        await secureStorage.saveUserProfile(JSON.stringify(res.user));
+        telemetry.setAnonymousUserId(res.user.id);
+      }
+    }
+    return res;
+  }
+
+  async verifyEmailOtp(email: string, otp: string): Promise<any> {
+    return this.request<any>('/auth/student/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim().toLowerCase(), otp, purpose: 'student_registration' })
+    });
+  }
+
+  async changePassword(currentPassword: string, newPassword: string, confirmPassword: string): Promise<any> {
+    const res = await this.request<any>('/auth/student/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword })
+    });
+    if (res.accessToken) {
+      await secureStorage.saveTokens(res.accessToken, res.refreshToken);
+    }
+    return res;
+  }
+
+  async requestPasswordReset(email: string): Promise<any> {
+    return this.request<any>('/auth/student/request-password-reset', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim().toLowerCase() })
+    });
+  }
+
+  async requestPasswordSetup(email: string): Promise<any> {
+    return this.request<any>('/auth/student/request-password-setup', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim().toLowerCase() })
+    });
+  }
+
+  async getSessions(): Promise<any> {
+    return this.request<any>('/me/sessions');
+  }
+
+  async revokeSession(sessionId?: string): Promise<any> {
+    const endpoint = sessionId ? `/me/sessions/${sessionId}` : '/me/sessions';
+    return this.request<any>(endpoint, { method: 'DELETE' });
   }
 
   async logout(): Promise<void> {

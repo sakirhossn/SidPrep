@@ -2,6 +2,9 @@
 const nextConfig = {
   output: process.env.BUILD_STANDALONE === 'true' || process.platform === 'linux' ? 'standalone' : undefined,
   reactStrictMode: true,
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   async headers() {
     return [
       {

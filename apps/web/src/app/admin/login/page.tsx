@@ -14,28 +14,27 @@ import {
   RefreshCw,
   Server,
   Clock,
+  KeyRound,
 } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
-const DEFAULT_ADMIN_EMAIL = 'admin@sidprep.in';
-const DEFAULT_ADMIN_PASSWORD = '';
-
 export default function AdminLoginPage() {
   const router = useRouter();
-  const [step, setStep] = useState<'PASSWORD' | 'TOTP'>('PASSWORD');
+  const [step, setStep] = useState<'PASSWORD' | 'TOTP' | 'FORGOT_PASSWORD'>('PASSWORD');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [totpCode, setTotpCode] = useState('');
   const [preAuthToken, setPreAuthToken] = useState('');
-  const [targetEmail, setTargetEmail] = useState('');
+  const [maskedEmail, setMaskedEmail] = useState('');
   const [countdown, setCountdown] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [emailSending, setEmailSending] = useState(false);
-  const [requestingPassword, setRequestingPassword] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSubmitted, setForgotSubmitted] = useState(false);
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
 
   // Check backend server connectivity on mount
@@ -51,7 +50,7 @@ export default function AdminLoginPage() {
     checkServer();
   }, []);
 
-  // 180-second live cooldown timer for resending OTP
+  // Live cooldown timer for resending OTP
   useEffect(() => {
     if (step !== 'TOTP' || countdown <= 0) return;
     const timer = setInterval(() => {
@@ -59,12 +58,6 @@ export default function AdminLoginPage() {
     }, 1000);
     return () => clearInterval(timer);
   }, [step, countdown]);
-
-  const fillDefaultCredentials = () => {
-    setEmail(DEFAULT_ADMIN_EMAIL);
-    setPassword(DEFAULT_ADMIN_PASSWORD);
-    setError(null);
-  };
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,14 +79,14 @@ export default function AdminLoginPage() {
       }
 
       setPreAuthToken(data.preAuthToken);
-      const recipient = data.targetEmail || email.trim();
-      setTargetEmail(recipient);
+      const masked = data.maskedEmail || (email.trim().length > 3 ? `${email.trim().slice(0, 3)}***@...` : 'your email');
+      setMaskedEmail(masked);
       setCountdown(data.resendCooldownSeconds || 180);
 
       if (data.emailSent) {
-        setSuccessMsg(`A 6-digit live verification code has been dispatched to ${recipient} via SidPrep <no-reply@sidprep.in>.`);
+        setSuccessMsg(`A 6-digit verification code has been sent to your registered email address: ${masked}`);
       } else {
-        setSuccessMsg(`Live 2FA session initialized for ${recipient}. Please check your inbox.`);
+        setSuccessMsg(`Live 2FA session initialized. Verification code sent to: ${masked}`);
       }
 
       setStep('TOTP');
@@ -105,9 +98,9 @@ export default function AdminLoginPage() {
         err.message?.includes('NetworkError');
 
       if (isNetworkError) {
-        setError('Unable to reach the backend API server. Please verify the API service is online on port 4000.');
+        setError('Unable to reach the backend API server. Please verify the API service is online.');
       } else {
-        setError(err.message || 'Login failed. Please verify staff credentials.');
+        setError(err.message || 'Login failed. Please verify credentials.');
       }
     } finally {
       setLoading(false);
@@ -133,7 +126,9 @@ export default function AdminLoginPage() {
         throw new Error(data?.error?.message || 'Failed to dispatch email verification code.');
       }
 
-      setSuccessMsg(data.message || `A new 6-digit verification code has been dispatched to ${targetEmail || email}.`);
+      const masked = data.maskedEmail || maskedEmail;
+      setMaskedEmail(masked);
+      setSuccessMsg(data.message || `A 6-digit verification code has been sent to your registered email address: ${masked}`);
       setCountdown(data.resendCooldownSeconds || 180);
     } catch (err: any) {
       setError(err.message || 'Could not send verification email. Please try again.');
@@ -142,29 +137,35 @@ export default function AdminLoginPage() {
     }
   };
 
-  const handleRequestSystemPassword = async () => {
+  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail || !forgotEmail.includes('@')) {
+      setError('Please enter a valid registered email address.');
+      return;
+    }
+
     setError(null);
     setSuccessMsg(null);
-    setRequestingPassword(true);
+    setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE}/v1/auth/admin/request-system-password`, {
+      const res = await fetch(`${API_BASE}/v1/auth/admin/request-password-reset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: (email || DEFAULT_ADMIN_EMAIL).trim() }),
+        body: JSON.stringify({ email: forgotEmail.trim() }),
       });
 
       const data = await res.json().catch(() => null);
 
-      if (!res.ok) {
-        throw new Error(data?.error?.message || 'Failed to dispatch system password.');
-      }
-
-      setSuccessMsg(data.message || 'System-generated password dispatched to your email.');
+      // Enumeration-resistant: always display the uniform confirmation
+      setForgotSubmitted(true);
+      setSuccessMsg(
+        data?.message || 'If an eligible account exists for this email address, a password-reset link will be sent.'
+      );
     } catch (err: any) {
-      setError(err.message || 'Could not request system password.');
+      setError('Unable to submit request. Please verify connection.');
     } finally {
-      setRequestingPassword(false);
+      setLoading(false);
     }
   };
 
@@ -193,7 +194,7 @@ export default function AdminLoginPage() {
 
       const adminUser = data.admin || {
         id: data.id || 'adm_owner',
-        name: data.name || 'Sk Sakir Hossain',
+        name: data.name || 'Administrator',
         role: data.role || 'SUPER_ADMIN',
         email: data.email || email,
       };
@@ -209,7 +210,6 @@ export default function AdminLoginPage() {
         document.cookie = `sidprep_admin_token=${token}; path=/; max-age=28800; SameSite=Lax`;
       } catch {}
 
-      // Hard navigation to eliminate React hydration/layout state mismatches
       window.location.href = '/admin';
     } catch (err: any) {
       setError(err.message || 'Verification failed. Please enter the valid 6-digit code sent to your email.');
@@ -236,7 +236,7 @@ export default function AdminLoginPage() {
             SidPrep 2.0 Security Console
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Protected Staff CMS • Role-Based Access & Live Email 2FA
+            Protected Staff CMS • Role-Based Access &amp; Live Email 2FA
           </p>
 
           {/* Connection status indicator */}
@@ -251,7 +251,7 @@ export default function AdminLoginPage() {
               </span>
             ) : (
               <span className="text-red-400 font-semibold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span> Offline (Port 4000)
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span> Offline
               </span>
             )}
           </div>
@@ -260,23 +260,9 @@ export default function AdminLoginPage() {
         {/* Card */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-7 shadow-2xl">
           {error && (
-            <div className="mb-5 p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex flex-col gap-2">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span className="leading-relaxed">{error}</span>
-              </div>
-              {step === 'PASSWORD' && (
-                <div className="pt-2 border-t border-red-500/20 flex items-center justify-between">
-                  <span className="text-[11px] text-slate-400">Want default credentials?</span>
-                  <button
-                    type="button"
-                    onClick={fillDefaultCredentials}
-                    className="text-[11px] text-primary hover:underline font-semibold"
-                  >
-                    Auto-fill default credentials
-                  </button>
-                </div>
-              )}
+            <div className="mb-5 p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">{error}</span>
             </div>
           )}
 
@@ -287,7 +273,7 @@ export default function AdminLoginPage() {
             </div>
           )}
 
-          {step === 'PASSWORD' ? (
+          {step === 'PASSWORD' && (
             <form onSubmit={handlePasswordSubmit} className="space-y-4">
               <div>
                 <label htmlFor="admin-email" className="block text-xs font-semibold text-slate-300 mb-1.5">
@@ -298,7 +284,8 @@ export default function AdminLoginPage() {
                   type="email"
                   required
                   value={email}
-                  placeholder="admin@sidprep.in"
+                  placeholder="name@domain.com"
+                  autoComplete="email"
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
                 />
@@ -332,20 +319,26 @@ export default function AdminLoginPage() {
                     type={showPassword ? 'text' : 'password'}
                     required
                     value={password}
+                    autoComplete="current-password"
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs focus:ring-2 focus:ring-primary focus:border-transparent outline-none pr-10"
                   />
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-800/60 border border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
-                <span>Admin: <strong className="text-white">admin@sidprep.in</strong></span>
+              <div className="flex items-center justify-end">
                 <button
                   type="button"
-                  onClick={fillDefaultCredentials}
-                  className="text-primary hover:underline font-semibold"
+                  onClick={() => {
+                    setError(null);
+                    setSuccessMsg(null);
+                    setForgotEmail(email);
+                    setForgotSubmitted(false);
+                    setStep('FORGOT_PASSWORD');
+                  }}
+                  className="text-xs text-primary hover:underline font-medium"
                 >
-                  Quick Fill
+                  Forgot password?
                 </button>
               </div>
 
@@ -357,29 +350,78 @@ export default function AdminLoginPage() {
                 {loading ? 'Authenticating & Sending Code...' : 'Authenticate & Send 2FA Code'}
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
-
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={handleRequestSystemPassword}
-                  disabled={requestingPassword}
-                  className="w-full py-2.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-slate-300 text-xs font-medium flex items-center justify-center gap-2 transition-all"
-                >
-                  {requestingPassword ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
-                      Dispatching reset instructions to email...
-                    </>
-                  ) : (
-                    <>
-                      <Mail className="w-3.5 h-3.5 text-primary" />
-                      Email Me Password Reset Instructions
-                    </>
-                  )}
-                </button>
-              </div>
             </form>
-          ) : (
+          )}
+
+          {step === 'FORGOT_PASSWORD' && (
+            <div className="space-y-4">
+              <div className="text-center py-1">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary mx-auto mb-2">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <h2 className="text-sm font-heading font-bold text-white">Reset Administrative Password</h2>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Enter your registered administrative email to receive an expiring 15-minute reset link.
+                </p>
+              </div>
+
+              {!forgotSubmitted ? (
+                <form onSubmit={handleForgotPasswordSubmit} className="space-y-4">
+                  <div>
+                    <label htmlFor="forgot-email" className="block text-xs font-semibold text-slate-300 mb-1.5">
+                      Registered Email Address
+                    </label>
+                    <input
+                      id="forgot-email"
+                      type="email"
+                      required
+                      value={forgotEmail}
+                      placeholder="name@domain.com"
+                      onChange={(e) => setForgotEmail(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs focus:ring-2 focus:ring-primary focus:border-transparent outline-none"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-2.5 rounded-xl bg-primary hover:bg-primary-600 text-white font-heading font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
+                  >
+                    {loading ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Sending Reset Link...
+                      </>
+                    ) : (
+                      <>
+                        <Mail className="w-3.5 h-3.5" />
+                        Send Password-Reset Link
+                      </>
+                    )}
+                  </button>
+                </form>
+              ) : (
+                <div className="p-3 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-300 text-xs text-center leading-relaxed">
+                  Please check your inbox for instructions to securely reset your password.
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setSuccessMsg(null);
+                  setStep('PASSWORD');
+                }}
+                className="w-full py-2 text-xs text-slate-400 hover:text-white flex items-center justify-center gap-1.5"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                Back to Admin Login
+              </button>
+            </div>
+          )}
+
+          {step === 'TOTP' && (
             <form onSubmit={handleTotpSubmit} className="space-y-4">
               <div className="text-center py-2">
                 <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mx-auto mb-2.5">
@@ -389,9 +431,8 @@ export default function AdminLoginPage() {
                   Enter 6-Digit Verification Code
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
-                  A real-time security code was dispatched to{' '}
-                  <strong className="text-white">{targetEmail || email || DEFAULT_ADMIN_EMAIL}</strong>{' '}
-                  from <span className="text-indigo-400 font-medium">SidPrep &lt;no-reply@sidprep.in&gt;</span>.
+                  A 6-digit verification code has been sent to your registered email address:{' '}
+                  <strong className="text-white">{maskedEmail}</strong>.
                 </p>
               </div>
 
@@ -413,29 +454,29 @@ export default function AdminLoginPage() {
                 />
               </div>
 
-              {/* 180s Resend Timer & Button */}
+              {/* Live Resend Timer & Button */}
               <div className="pt-1">
                 {countdown > 0 ? (
                   <div className="w-full py-2.5 px-3 rounded-xl bg-slate-800/40 border border-slate-800 text-slate-400 text-xs flex items-center justify-center gap-2">
                     <Clock className="w-3.5 h-3.5 text-primary animate-pulse" />
-                    <span>Resend code in <strong className="text-white font-mono">{formatCountdown(countdown)}</strong></span>
+                    <span>Resend code in {formatCountdown(countdown)}</span>
                   </div>
                 ) : (
                   <button
                     type="button"
                     onClick={handleSendEmailOtp}
                     disabled={emailSending}
-                    className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-200 text-xs font-medium flex items-center justify-center gap-2 transition-all"
+                    className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 text-xs font-medium flex items-center justify-center gap-2 transition-all"
                   >
                     {emailSending ? (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
-                        Dispatching fresh code...
+                        Dispatching Code...
                       </>
                     ) : (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 text-primary" />
-                        Resend 6-Digit Code to Email
+                        Resend Verification Code
                       </>
                     )}
                   </button>
@@ -444,30 +485,28 @@ export default function AdminLoginPage() {
 
               <button
                 type="submit"
-                disabled={loading || totpCode.trim().length !== 6}
+                disabled={loading || totpCode.length !== 6}
                 className="w-full py-3 rounded-xl bg-primary hover:bg-primary-600 disabled:opacity-50 text-white font-heading font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2"
               >
-                {loading ? 'Verifying Code...' : 'Verify Code & Access Dashboard'}
-                <CheckCircle2 className="w-3.5 h-3.5" />
+                {loading ? 'Verifying 2FA Code...' : 'Verify & Enter Security Console'}
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
 
               <button
                 type="button"
                 onClick={() => {
-                  setStep('PASSWORD');
                   setError(null);
                   setSuccessMsg(null);
+                  setTotpCode('');
+                  setStep('PASSWORD');
                 }}
-                className="w-full py-2 text-slate-400 hover:text-white text-xs flex items-center justify-center gap-1.5 transition-colors"
+                className="w-full py-2 text-xs text-slate-400 hover:text-white flex items-center justify-center gap-1.5"
               >
-                <ArrowLeft className="w-3.5 h-3.5" /> Back to Password
+                <ArrowLeft className="w-3.5 h-3.5" />
+                Back to Sign In
               </button>
             </form>
           )}
-        </div>
-
-        <div className="text-center mt-6 text-[11px] text-slate-500">
-          All administrative sessions are logged into the immutable audit ledger.
         </div>
       </div>
     </div>

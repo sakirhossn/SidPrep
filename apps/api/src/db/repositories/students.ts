@@ -11,6 +11,7 @@ export class StudentRepository extends BaseRepository<StudentRecord> {
         const student: StudentRecord = {
           id: row.id,
           email: row.email,
+          passwordHash: row.password_hash || undefined,
           firstName: row.first_name || undefined,
           lastName: row.last_name || undefined,
           isSingleName: Boolean(row.is_single_name),
@@ -46,17 +47,18 @@ export class StudentRepository extends BaseRepository<StudentRecord> {
   public async persistInsertOrUpdate(record: StudentRecord): Promise<void> {
     await query(
       `INSERT INTO students (
-        id, email, first_name, last_name, is_single_name, phone, phone_country_code,
+        id, email, password_hash, first_name, last_name, is_single_name, phone, phone_country_code,
         is_phone_verified, preferred_language, target_exams, primary_exam_id,
         daily_goal_minutes, streak_days, status, is_email_verified, is_profile_complete,
         token_version, completed_tasks, settings, registration_ip, last_login_ip,
         last_login_at, last_activity_at, login_source, created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-        $17, $18, $19, $20, $21, $22, $23, $24, $25, NOW()
+        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, NOW()
       )
       ON CONFLICT (id) DO UPDATE SET
         email = EXCLUDED.email,
+        password_hash = COALESCE(EXCLUDED.password_hash, students.password_hash),
         first_name = EXCLUDED.first_name,
         last_name = EXCLUDED.last_name,
         is_single_name = EXCLUDED.is_single_name,
@@ -83,6 +85,7 @@ export class StudentRepository extends BaseRepository<StudentRecord> {
       [
         record.id,
         record.email,
+        record.passwordHash || null,
         record.firstName || null,
         record.lastName || null,
         record.isSingleName || false,

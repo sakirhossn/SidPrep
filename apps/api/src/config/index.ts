@@ -11,6 +11,7 @@ const EnvSchema = z
     PORT: z.coerce.number().default(4000),
     API_PORT: z.coerce.number().default(4000),
     WEB_PORT: z.coerce.number().default(3000),
+    SITE_URL: z.string().default(process.env.SITE_URL || process.env.APP_URL || 'http://localhost:3000'),
     DATABASE_URL: z.string().optional(),
     JWT_SECRET: isDev
       ? z.string().default('dev-only-do-not-use-jwt-secret-min-32-chars-long-12345')

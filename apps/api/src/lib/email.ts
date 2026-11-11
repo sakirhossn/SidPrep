@@ -256,3 +256,175 @@ export async function sendAdminCredentialsEmail(
     isPriorityOtp: true,
   });
 }
+
+/**
+ * Dispatch Admin Password Reset Link (15-minute single-use expiry)
+ */
+export async function sendAdminPasswordResetEmail(
+  adminEmail: string,
+  resetLink: string
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #0f172a; color: #f8fafc; border-radius: 16px; border: 1px solid #1e293b;">
+      <h2 style="color: #6366f1; margin-top: 0;">SidPrep Administrator Password Reset</h2>
+      <p style="color: #94a3b8; font-size: 14px;">A password reset request was initiated for your administrator account.</p>
+      
+      <div style="background: #1e293b; padding: 20px; border-radius: 12px; margin: 20px 0; text-align: center; border: 1px solid #334155;">
+        <p style="margin: 0 0 16px 0; font-size: 13px; color: #cbd5e1;">Click the button below to reset your password. This link is valid for 15 minutes and can only be used once:</p>
+        <a href="${resetLink}" style="display: inline-block; background: #6366f1; color: #ffffff; padding: 12px 24px; border-radius: 8px; font-weight: 700; text-decoration: none; font-size: 14px;">Reset Administrator Password</a>
+      </div>
+
+      <p style="font-size: 12px; color: #94a3b8;">If you did not request this password reset, please contact system security immediately. Your account remains secure.</p>
+      <hr style="border: none; border-top: 1px solid #334155; margin: 24px 0;" />
+      <p style="font-size: 11px; color: #64748b; margin: 0;">SidPrep 2.0 Security Operations • Automated Security Notification</p>
+    </div>
+  `;
+
+  return sendEmail({
+    toEmail: adminEmail,
+    subject: 'SidPrep Admin Password Reset Request',
+    htmlContent,
+    textContent: `A password reset was requested for your SidPrep administrator account. Use this link within 15 minutes to reset your password: ${resetLink}\n\nIf you did not request this, contact security immediately.`,
+    isPriorityOtp: true,
+  });
+}
+
+/**
+ * Dispatch Admin Password Changed Security Notification
+ */
+export async function sendAdminPasswordChangedEmail(
+  adminEmail: string
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; background: #0f172a; color: #f8fafc; border-radius: 16px; border: 1px solid #1e293b;">
+      <h2 style="color: #22c55e; margin-top: 0;">SidPrep Administrator Password Updated</h2>
+      <p style="color: #cbd5e1; font-size: 14px;">The password for your administrator account (<strong style="color: #ffffff;">${adminEmail}</strong>) has been successfully updated.</p>
+      <p style="color: #94a3b8; font-size: 13px;">All existing administrative sessions have been terminated. You must sign in using your new password and complete standard 2FA.</p>
+      <div style="background: #1e293b; padding: 14px; border-radius: 8px; margin: 18px 0; border: 1px solid #334155;">
+        <p style="color: #f87171; font-size: 12px; margin: 0;"><strong>Security Notice:</strong> If you did not make this change, your credentials may be compromised. Alert security operations immediately.</p>
+      </div>
+      <p style="font-size: 11px; color: #64748b; margin: 0;">SidPrep 2.0 Security Operations</p>
+    </div>
+  `;
+
+  return sendEmail({
+    toEmail: adminEmail,
+    subject: 'Security Alert: SidPrep Administrator Password Changed',
+    htmlContent,
+    textContent: `Your SidPrep administrator password has been updated. All active sessions have been terminated. If you did not make this change, alert security immediately.`,
+    isPriorityOtp: true,
+  });
+}
+
+/**
+ * Dispatch Student Password Reset Link (15-minute single-use expiry)
+ */
+export async function sendStudentPasswordResetEmail(
+  studentEmail: string,
+  resetLink: string
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 540px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+      <div style="background-color: #1E3C2C; padding: 24px; text-align: center;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 800;">SidPrep Preparation Portal</h1>
+      </div>
+      <div style="padding: 32px 28px;">
+        <h2 style="color: #0f172a; font-size: 18px; font-weight: 700; margin-top: 0;">Password Reset Request</h2>
+        <p style="color: #475569; font-size: 14px; line-height: 1.6;">
+          We received a request to reset the password for your student account. Click the button below to set a new password:
+        </p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${resetLink}" style="display: inline-block; background-color: #1E3C2C; color: #ffffff; padding: 12px 28px; border-radius: 10px; font-weight: 700; text-decoration: none; font-size: 14px;">Reset Password</a>
+        </div>
+        <p style="color: #64748b; font-size: 12px; line-height: 1.5;">
+          This link will expire in 15 minutes and can only be used once. If you did not request a password reset, you can safely ignore this email.
+        </p>
+      </div>
+      <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 24px; text-align: center;">
+        <p style="color: #94a3b8; font-size: 11px; margin: 0;">SidPrep 2.0 Student Identity Service</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    toEmail: studentEmail,
+    subject: 'Reset Your SidPrep Student Password',
+    htmlContent,
+    textContent: `We received a request to reset your SidPrep password. Visit the following link within 15 minutes to reset it: ${resetLink}\n\nIf you did not request this, you can ignore this email.`,
+    isPriorityOtp: true,
+  });
+}
+
+/**
+ * Dispatch Student Password Setup Link (For existing OTP-only accounts)
+ */
+export async function sendStudentPasswordSetupEmail(
+  studentEmail: string,
+  setupLink: string
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 540px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+      <div style="background-color: #1E3C2C; padding: 24px; text-align: center;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 800;">SidPrep Preparation Portal</h1>
+      </div>
+      <div style="padding: 32px 28px;">
+        <h2 style="color: #0f172a; font-size: 18px; font-weight: 700; margin-top: 0;">Set Up Your Student Password</h2>
+        <p style="color: #475569; font-size: 14px; line-height: 1.6;">
+          Your SidPrep account is ready for direct password login. Click below to establish your password. Your existing preparation history and progress will remain intact.
+        </p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${setupLink}" style="display: inline-block; background-color: #1E3C2C; color: #ffffff; padding: 12px 28px; border-radius: 10px; font-weight: 700; text-decoration: none; font-size: 14px;">Set My Password</a>
+        </div>
+        <p style="color: #64748b; font-size: 12px; line-height: 1.5;">
+          This link is valid for 15 minutes. Once set, you can log in directly using your email and password on both the web and mobile apps.
+        </p>
+      </div>
+      <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 24px; text-align: center;">
+        <p style="color: #94a3b8; font-size: 11px; margin: 0;">SidPrep 2.0 Student Identity Service</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    toEmail: studentEmail,
+    subject: 'Set Your SidPrep Student Password',
+    htmlContent,
+    textContent: `Set up your password for direct login on SidPrep: ${setupLink}\n\nThis single-use link expires in 15 minutes.`,
+    isPriorityOtp: true,
+  });
+}
+
+/**
+ * Dispatch Student Password Changed Notification
+ */
+export async function sendStudentPasswordChangedEmail(
+  studentEmail: string
+): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const htmlContent = `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 540px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+      <div style="background-color: #1E3C2C; padding: 24px; text-align: center;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 800;">SidPrep Security Notification</h1>
+      </div>
+      <div style="padding: 32px 28px;">
+        <h2 style="color: #0f172a; font-size: 18px; font-weight: 700; margin-top: 0;">Your Password Was Changed</h2>
+        <p style="color: #475569; font-size: 14px; line-height: 1.6;">
+          The password for your SidPrep account was successfully updated. All other active sessions have been revoked.
+        </p>
+        <p style="color: #dc2626; font-size: 13px; font-weight: 600;">
+          If you did not make this change, please contact SidPrep support immediately.
+        </p>
+      </div>
+      <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 24px; text-align: center;">
+        <p style="color: #94a3b8; font-size: 11px; margin: 0;">SidPrep 2.0 Account Security</p>
+      </div>
+    </div>
+  `;
+
+  return sendEmail({
+    toEmail: studentEmail,
+    subject: 'Your SidPrep Password Has Been Changed',
+    htmlContent,
+    textContent: `Your SidPrep student password was changed. If you did not make this change, contact support immediately.`,
+    isPriorityOtp: true,
+  });
+}

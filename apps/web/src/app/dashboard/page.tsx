@@ -15,14 +15,17 @@ import {
   LogOut,
   Target,
   Sparkles,
+  User,
 } from 'lucide-react';
 import { PublicShell } from '@/components/public-shell';
 import { getStudentUser, clearStudentSession, StudentUser } from '@/lib/auth';
+import { StudentProfileModal } from '@/components/StudentProfileModal';
 
 export default function StudentDashboardPage() {
   const router = useRouter();
   const [student, setStudent] = useState<StudentUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showProfile, setShowProfile] = useState(false);
 
   useEffect(() => {
     const user = getStudentUser();
@@ -70,6 +73,12 @@ export default function StudentDashboardPage() {
 
             <div className="flex items-center gap-3">
               <button
+                onClick={() => setShowProfile(true)}
+                className="px-4 py-2.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-xs font-semibold flex items-center gap-2 transition-all"
+              >
+                <User className="w-4 h-4" /> Profile &amp; Account
+              </button>
+              <button
                 onClick={handleLogout}
                 className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-2 transition-all"
               >
@@ -78,6 +87,14 @@ export default function StudentDashboardPage() {
             </div>
           </div>
         </div>
+
+        {/* Profile Modal */}
+        <StudentProfileModal
+          isOpen={showProfile}
+          onClose={() => setShowProfile(false)}
+          student={student}
+          onProfileUpdated={(updated) => setStudent(updated)}
+        />
 
         {/* Quick Stats Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-10">

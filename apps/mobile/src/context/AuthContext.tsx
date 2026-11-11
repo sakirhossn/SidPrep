@@ -14,6 +14,11 @@ interface AuthContextType {
   isSuspended: boolean;
   requestOtp: (email: string, phone?: string, registrationDraft?: StudentRegistrationDraft) => Promise<{ success: boolean; message: string; resendAvailableInSeconds?: number }>;
   verifyOtp: (email: string, otp: string, registrationDraft?: StudentRegistrationDraft) => Promise<{ isNewUser?: boolean; isProfileComplete?: boolean }>;
+  loginWithPassword: (email: string, password: string) => Promise<{ user: any; isProfileComplete?: boolean }>;
+  registerWithPassword: (data: any) => Promise<{ user: any; isProfileComplete?: boolean }>;
+  changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) => Promise<any>;
+  requestPasswordReset: (email: string) => Promise<any>;
+  requestPasswordSetup: (email: string) => Promise<any>;
   logout: () => Promise<void>;
   updatePreferences: (data: {
     selectedExamIds?: string[];
@@ -166,6 +171,68 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  const loginWithPassword = useCallback(async (email: string, password: string) => {
+    try {
+      const res = await api.loginWithPassword(email, password);
+      const exams = res.user?.selectedExamIds || res.user?.targetExams || [];
+      const normalized = {
+        ...res.user,
+        selectedExamIds: exams,
+        targetExams: res.user?.targetExams || exams,
+      };
+      setUser(normalized);
+      setIsSuspended(false);
+      const completed = Boolean(
+        normalized.isProfileComplete ||
+        (normalized.firstName && normalized.phone && exams.length > 0)
+      );
+      setIsOnboarded(completed);
+      return { user: normalized, isProfileComplete: completed };
+    } catch (e: any) {
+      if (e?.code === 'ACCOUNT_SUSPENDED') {
+        setIsSuspended(true);
+      }
+      throw e;
+    }
+  }, []);
+
+  const registerWithPassword = useCallback(async (data: any) => {
+    try {
+      const res = await api.registerWithPassword(data);
+      const exams = res.user?.selectedExamIds || res.user?.targetExams || [];
+      const normalized = {
+        ...res.user,
+        selectedExamIds: exams,
+        targetExams: res.user?.targetExams || exams,
+      };
+      setUser(normalized);
+      setIsSuspended(false);
+      const completed = Boolean(
+        normalized.isProfileComplete ||
+        (normalized.firstName && normalized.phone && exams.length > 0)
+      );
+      setIsOnboarded(completed);
+      return { user: normalized, isProfileComplete: completed };
+    } catch (e: any) {
+      if (e?.code === 'ACCOUNT_SUSPENDED') {
+        setIsSuspended(true);
+      }
+      throw e;
+    }
+  }, []);
+
+  const changePassword = useCallback(async (currentPassword: string, newPassword: string, confirmPassword: string) => {
+    return api.changePassword(currentPassword, newPassword, confirmPassword);
+  }, []);
+
+  const requestPasswordReset = useCallback(async (email: string) => {
+    return api.requestPasswordReset(email);
+  }, []);
+
+  const requestPasswordSetup = useCallback(async (email: string) => {
+    return api.requestPasswordSetup(email);
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await api.logout();
@@ -232,6 +299,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isSuspended,
         requestOtp,
         verifyOtp,
+        loginWithPassword,
+        registerWithPassword,
+        changePassword,
+        requestPasswordReset,
+        requestPasswordSetup,
         logout,
         updatePreferences,
         refreshProfile,

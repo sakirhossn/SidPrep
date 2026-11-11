@@ -26,6 +26,7 @@
     "@fastify/rate-limit": "^9.1.0",
     "@fastify/sensible": "^5.5.0",
     "@fastify/static": "^7.0.4",
+    "@node-rs/argon2": "^2.2.2",
     "@sidprep/contracts": "workspace:*",
     "@sidprep/design-tokens": "workspace:*",
     "dotenv": "^16.4.5",

@@ -461,6 +461,57 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
+   * GET /me/sessions
+   * List active sessions for the current student
+   */
+  fastify.get('/me/sessions', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
+    const student = request.student!.record;
+    try {
+      const res = await query<any>(
+        `SELECT id, device_info, ip_address, login_source, user_agent, created_at, last_seen_at
+         FROM student_sessions
+         WHERE student_id = $1 AND revoked_at IS NULL
+         ORDER BY last_seen_at DESC`,
+        [student.id]
+      );
+      return reply.send({
+        success: true,
+        sessions: (res.rows || []).map((row) => ({
+          id: row.id,
+          deviceInfo: row.device_info,
+          ipAddress: row.ip_address,
+          loginSource: row.login_source,
+          userAgent: row.user_agent,
+          createdAt: row.created_at,
+          lastSeenAt: row.last_seen_at,
+          isCurrentSession: true,
+        })),
+      });
+    } catch (err: any) {
+      console.warn('[Users] Failed to fetch sessions:', err.message);
+      return reply.send({ success: true, sessions: [] });
+    }
+  });
+
+  /**
+   * DELETE /me/sessions/:id
+   * Revoke a specific session
+   */
+  fastify.delete('/me/sessions/:id', { preHandler: [requireStudentAuth()] }, async (request, reply) => {
+    const student = request.student!.record;
+    const { id } = request.params as { id: string };
+    try {
+      await query(
+        `UPDATE student_sessions SET revoked_at = NOW() WHERE id = $1 AND student_id = $2`,
+        [id, student.id]
+      );
+      return reply.send({ success: true, message: 'Session revoked successfully.' });
+    } catch (err: any) {
+      return reply.code(500).send({ success: false, error: { code: 'REVOKE_FAILED', message: err.message } });
+    }
+  });
+
+  /**
    * POST /me/avatar
    * Upload and set student avatar image (magic byte validation, 5MB max, local/storage persistence)
    */

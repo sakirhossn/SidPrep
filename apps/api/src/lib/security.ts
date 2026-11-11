@@ -1,24 +1,44 @@
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
+import { hash as argon2Hash, verify as argon2Verify } from '@node-rs/argon2';
 import { env } from '../config/index.js';
 
 /**
- * Strong password hashing using PBKDF2 with SHA-512
+ * Server-authoritative email masking for security notifications
+ * Displays at most first 3 characters before @, masking the remainder.
+ * For local parts <= 2 characters, reveals only the 1st character.
  */
-export async function hashPassword(password: string): Promise<string> {
-  const salt = crypto.randomBytes(16).toString('hex');
-  return new Promise((resolve, reject) => {
-    crypto.pbkdf2(password, salt, 100000, 64, 'sha512', (err, derivedKey) => {
-      if (err) return reject(err);
-      resolve(`${salt}:${derivedKey.toString('hex')}`);
-    });
-  });
+export function maskEmail(email: string): string {
+  if (!email || !email.includes('@')) return email || '';
+  const [local, domain] = email.trim().toLowerCase().split('@');
+  if (!local || !domain) return email;
+  const visibleCount = local.length <= 2 ? 1 : Math.min(3, local.length);
+  return `${local.slice(0, visibleCount)}***@${domain}`;
 }
 
 /**
- * Constant-time password verification
+ * Strong password hashing using Argon2id
+ */
+export async function hashPassword(password: string): Promise<string> {
+  return argon2Hash(password);
+}
+
+/**
+ * Constant-time password verification supporting Argon2id and legacy PBKDF2
  */
 export async function verifyPassword(password: string, combinedHash: string): Promise<boolean> {
+  if (!combinedHash) return false;
+
+  // Modern Argon2id hashes start with $argon2
+  if (combinedHash.startsWith('$argon2')) {
+    try {
+      return await argon2Verify(combinedHash, password);
+    } catch {
+      return false;
+    }
+  }
+
+  // Legacy PBKDF2 fallback for existing development / migration data
   const parts = combinedHash.split(':');
   if (parts.length !== 2) return false;
   const [salt, hash] = parts;
@@ -30,6 +50,13 @@ export async function verifyPassword(password: string, combinedHash: string): Pr
       resolve(crypto.timingSafeEqual(hashBuffer, derivedKey));
     });
   });
+}
+
+/**
+ * Generate cryptographically secure random token (hex)
+ */
+export function generateRandomToken(bytes = 32): string {
+  return crypto.randomBytes(bytes).toString('hex');
 }
 
 /**

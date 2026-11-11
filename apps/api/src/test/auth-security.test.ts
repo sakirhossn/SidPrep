@@ -106,7 +106,10 @@ describe('Batch 1: Identity & Authentication Hardening Test Suite (F01-F07, F21-
     assert.equal(unknownRes.statusCode, 200);
     const unknownBody = JSON.parse(unknownRes.body);
     assert.equal(unknownBody.success, true);
-    assert.ok(unknownBody.message.includes('If an active administrative account exists'));
+    assert.ok(
+      unknownBody.message.includes('If an eligible account exists') ||
+        unknownBody.message.includes('If an active administrative account exists')
+    );
 
     // 2. Request reset for valid admin email
     const resetReqRes = await app.inject({
@@ -117,15 +120,18 @@ describe('Batch 1: Identity & Authentication Hardening Test Suite (F01-F07, F21-
     assert.equal(resetReqRes.statusCode, 200);
     const resetReqBody = JSON.parse(resetReqRes.body);
     assert.equal(resetReqBody.success, true);
-    assert.ok(resetReqBody.message.includes('If an active administrative account exists'));
+    assert.ok(
+      resetReqBody.message.includes('If an eligible account exists') ||
+        resetReqBody.message.includes('If an active administrative account exists')
+    );
     assert.ok(resetReqBody.devResetTokenHint, 'In test env, devResetTokenHint should be present');
 
     // 3. Confirm password hash in DB has NOT changed yet
     const adminAfterReq = db.adminUsers.get('adm_1');
     assert.equal(adminAfterReq?.passwordHash, originalHash, 'Password hash must NOT mutate on request');
 
-    // 4. Complete reset with valid token
-    const newPassword = 'NewlyChangedPassword2026!#';
+    // 4. Complete reset with valid token (meets 8-14 password policy)
+    const newPassword = 'AdminPass26!#';
     const resetConfirmRes = await app.inject({
       method: 'POST',
       url: '/v1/auth/admin/reset-password',

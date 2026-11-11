@@ -20,6 +20,7 @@ import { query } from './pool.js';
 export interface StudentRecord {
   id: string;
   email: string;
+  passwordHash?: string;
   firstName?: string;
   lastName?: string;
   isSingleName?: boolean;

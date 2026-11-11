@@ -1,4 +1,5 @@
 export * from './common.js';
+export * from './passwordPolicy.js';
 export * from './auth.js';
 export * from './me.js';
 export * from './exams.js';
