@@ -5,6 +5,7 @@ import path from 'node:path';
 import { db, ResourceRecord } from '../../db/index.js';
 import { env } from '../../config/index.js';
 import { validateFileMagicBytes, verifyJwt } from '../../lib/security.js';
+import { requireAdminAuth } from '../../lib/adminAuth.js';
 import { getSignedDownloadUrl } from '../../lib/storage.js';
 import { ResourceCreateSchema } from '@sidprep/contracts';
 
@@ -97,16 +98,16 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     if (!fs.existsSync(filePath)) {
-      // Synthesize authentic file buffer with matching magic bytes and checksum
-      let fallbackBuffer: Buffer;
-      if (resource.fileType === 'PDF') {
-        fallbackBuffer = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n');
-      } else if (resource.fileType === 'PNG') {
-        fallbackBuffer = Buffer.from('\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82', 'binary');
-      } else {
-        fallbackBuffer = Buffer.from('PK\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00!\x00Sample docx content');
-      }
-      fs.writeFileSync(filePath, fallbackBuffer);
+      db.logOperational({
+        service: 'STORAGE',
+        level: 'ERROR',
+        message: `Resource binary missing from storage for resource ${resource.id} at ${filePath}`,
+        meta: { resourceId: resource.id, filePath },
+      });
+      return reply.code(404).send({
+        success: false,
+        error: { code: 'RESOURCE_FILE_MISSING', message: 'The requested document file could not be found in storage.' },
+      });
     }
 
     const stat = fs.statSync(filePath);
@@ -254,17 +255,8 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
    * POST /admin/resources
    * Admin upload & create resource with true cryptographic SHA-256 and magic-byte checks (F15)
    */
-  fastify.post('/admin/resources', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Admin login required' } });
-    }
-
-    const token = authHeader.substring(7);
-    const admin = verifyJwt<{ sub: string; email: string; role: string }>(token);
-    if (!admin || !['SUPER_ADMIN', 'CONTENT_MANAGER'].includes(admin.role)) {
-      return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Insufficient resource upload role' } });
-    }
+  fastify.post('/admin/resources', { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER'])] }, async (request, reply) => {
+    const admin = request.admin!;
 
     const parse = ResourceCreateSchema.safeParse(request.body);
     if (!parse.success) {
@@ -275,23 +267,17 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
     const body = request.body as any;
     const resourceId = `res_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
-    // Extract actual file buffer
+    // Extract actual file buffer - real files only, no synthetic fallback
     let fileBuffer: Buffer;
     if (body.fileBase64) {
       fileBuffer = Buffer.from(body.fileBase64, 'base64');
     } else if (body.content) {
       fileBuffer = Buffer.from(body.content, 'utf8');
     } else {
-      // Synthesize authentic file buffer matching declared fileType format
-      if (data.fileType === 'PDF') {
-        fileBuffer = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n');
-      } else if (data.fileType === 'PNG') {
-        fileBuffer = Buffer.from('\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82', 'binary');
-      } else if (data.fileType === 'DOCX') {
-        fileBuffer = Buffer.from('PK\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00!\x00Standard docx content');
-      } else {
-        fileBuffer = Buffer.from('\xFF\xD8\xFF\xE0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xFF\xDB\x00C\x00');
-      }
+      return reply.code(400).send({
+        success: false,
+        error: { code: 'FILE_REQUIRED', message: 'Binary file payload (fileBase64 or content) is required. Synthetic creation is prohibited.' },
+      });
     }
 
     // Magic-byte check on the real buffer
@@ -331,7 +317,7 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
     await db.resources.set(resourceId, newResource);
 
     db.logAudit({
-      actorId: admin.sub,
+      actorId: admin.id,
       actorEmail: admin.email,
       actorRole: admin.role,
       module: 'RESOURCES',
@@ -356,22 +342,12 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
    * GET /admin/resources
    * Admin resource library management list
    */
-  fastify.get('/admin/resources', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Admin login required' } });
-    }
-
-    const token = authHeader.substring(7);
-    const admin = verifyJwt<{ sub: string; email: string; role: string }>(token);
-    if (!admin || !['SUPER_ADMIN', 'CONTENT_MANAGER', 'AUDITOR'].includes(admin.role)) {
-      return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Insufficient role' } });
-    }
-
+  fastify.get('/admin/resources', { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER', 'AUDITOR'])] }, async (request, reply) => {
+    const isR2 = env.STORAGE_DRIVER === 'r2';
     const items = Array.from(db.resources.values()).map((r) => ({
       ...r,
       fileSize: `${(r.fileSizeBytes / (1024 * 1024)).toFixed(1)} MB`,
-      storageDriver: 'Cloudflare R2 Standard',
+      storageDriver: isR2 ? 'Cloudflare R2 Standard' : 'Local Disk Storage',
       previewHtml: r.previewContent || `<p>Document preview for <strong>${r.title}</strong></p>`,
     }));
 
@@ -382,17 +358,8 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
    * PATCH /admin/resources/:id/permissions
    * Instantly toggle previewAllowed / downloadAllowed
    */
-  fastify.patch('/admin/resources/:id/permissions', async (request, reply) => {
-    const authHeader = request.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return reply.code(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Admin login required' } });
-    }
-
-    const token = authHeader.substring(7);
-    const admin = verifyJwt<{ sub: string; email: string; role: string }>(token);
-    if (!admin || !['SUPER_ADMIN', 'CONTENT_MANAGER'].includes(admin.role)) {
-      return reply.code(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Insufficient role' } });
-    }
+  fastify.patch('/admin/resources/:id/permissions', { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER'])] }, async (request, reply) => {
+    const admin = request.admin!;
 
     const { id } = request.params as { id: string };
     const resource = db.resources.get(id);
@@ -411,7 +378,7 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
     await db.resources.set(id, resource);
 
     db.logAudit({
-      actorId: admin.sub,
+      actorId: admin.id,
       actorEmail: admin.email,
       actorRole: admin.role,
       module: 'RESOURCES',

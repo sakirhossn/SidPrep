@@ -1,6 +1,7 @@
 import { db } from '../db/index.js';
 import { env } from '../config/index.js';
 import type { JobRunRecord } from '../db/index.js';
+import { executeNewsFetchJob } from '../services/newsIngestion.js';
 
 /**
  * SidPrep Self-Hosted Worker
@@ -119,10 +120,14 @@ export class SidPrepWorker {
   private async executeJob(job: JobRunRecord): Promise<void> {
     switch (job.jobType) {
       case 'NEWS_FETCH':
+        await executeNewsFetchJob({
+          sourceId: (job.payload as any)?.sourceId,
+          workerId: `bg_worker_${job.id}`,
+        });
         db.logOperational({
           service: 'WORKER',
           level: 'INFO',
-          message: 'Executing background news fetch job',
+          message: 'Executed real background news fetch job',
           meta: { jobId: job.id, payload: job.payload },
         });
         break;

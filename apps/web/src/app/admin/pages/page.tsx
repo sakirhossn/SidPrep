@@ -16,9 +16,25 @@ import {
   X,
   Lock,
   Globe,
+  History,
+  Eye,
+  Code2,
+  Columns,
+  RotateCcw,
 } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
+interface RevisionItem {
+  id: string;
+  pageId: string;
+  slug: string;
+  title: string;
+  contentHtml: string;
+  revisionNumber: number;
+  createdBy: string;
+  createdAt: string;
+}
 
 interface PageItem {
   id: string;
@@ -55,6 +71,69 @@ export default function AdminPagesManager() {
     metaDescription: '',
     isPublished: true,
   });
+
+  // Split / Live Preview Mode
+  const [editorView, setEditorView] = useState<'editor' | 'preview' | 'split'>('split');
+
+  // Revisions State
+  const [revisionsModalOpen, setRevisionsModalOpen] = useState(false);
+  const [revisions, setRevisions] = useState<RevisionItem[]>([]);
+  const [loadingRevisions, setLoadingRevisions] = useState(false);
+  const [revertingRevId, setRevertingRevId] = useState<string | null>(null);
+
+  const fetchRevisions = async (pageId: string) => {
+    setLoadingRevisions(true);
+    try {
+      const token =
+        sessionStorage.getItem('sidprep_admin_token') ||
+        localStorage.getItem('sidprep_admin_token');
+      const res = await fetch(`${API_BASE}/v1/admin/pages/${pageId}/revisions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRevisions(data.revisions || []);
+      }
+    } catch {
+      // Fallback
+    } finally {
+      setLoadingRevisions(false);
+    }
+  };
+
+  const handleRevert = async (revisionId: string) => {
+    if (!editingPage) return;
+    if (!confirm('Are you sure you want to revert to this revision? The current page content will be saved as a new revision snapshot.')) return;
+    setRevertingRevId(revisionId);
+    try {
+      const token =
+        sessionStorage.getItem('sidprep_admin_token') ||
+        localStorage.getItem('sidprep_admin_token');
+      const res = await fetch(`${API_BASE}/v1/admin/pages/${editingPage.id}/revert`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ revisionId }),
+      });
+      if (!res.ok) throw new Error('Failed to revert revision');
+      const data = await res.json();
+      setFormData((prev) => ({
+        ...prev,
+        title: data.page.title,
+        contentHtml: data.page.contentHtml,
+        slug: data.page.slug,
+      }));
+      setSuccess(`Page successfully reverted to revision.`);
+      setRevisionsModalOpen(false);
+      fetchPages();
+    } catch (err: any) {
+      setError(err.message || 'Error reverting revision');
+    } finally {
+      setRevertingRevId(null);
+    }
+  };
 
   const fetchPages = async () => {
     setLoading(true);
@@ -397,16 +476,114 @@ export default function AdminPagesManager() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Page Content (HTML / Rich Text)
-                </label>
-                <textarea
-                  rows={8}
-                  required
-                  value={formData.contentHtml}
-                  onChange={(e) => setFormData({ ...formData, contentHtml: e.target.value })}
-                  className="w-full p-3 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs font-mono focus:ring-2 focus:ring-primary outline-none leading-relaxed"
-                />
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-300">
+                    Page Content (HTML / Rich Text)
+                  </label>
+                  <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-lg border border-slate-700">
+                    <button
+                      type="button"
+                      onClick={() => setEditorView('editor')}
+                      className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                        editorView === 'editor' ? 'bg-primary text-white' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Code2 className="w-3 h-3" />
+                      Editor
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditorView('split')}
+                      className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                        editorView === 'split' ? 'bg-primary text-white' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Columns className="w-3 h-3" />
+                      Split View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditorView('preview')}
+                      className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
+                        editorView === 'preview' ? 'bg-primary text-white' : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Eye className="w-3 h-3" />
+                      Live Preview
+                    </button>
+                  </div>
+                </div>
+
+                {/* Quick HTML Insertion Toolbar */}
+                <div className="flex items-center gap-1.5 mb-2 overflow-x-auto py-1">
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, contentHtml: formData.contentHtml + '\n<h3>Section Heading</h3>\n' })}
+                    className="px-2 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] rounded border border-slate-700"
+                  >
+                    + H3 Heading
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, contentHtml: formData.contentHtml + '<b>Important text</b>' })}
+                    className="px-2 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] rounded border border-slate-700"
+                  >
+                    + Bold
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, contentHtml: formData.contentHtml + '\n<ul>\n  <li>Key point 1</li>\n  <li>Key point 2</li>\n</ul>\n' })}
+                    className="px-2 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] rounded border border-slate-700"
+                  >
+                    + Bullet List
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormData({ ...formData, contentHtml: formData.contentHtml + '\n<div class="p-3 bg-blue-900/30 border border-blue-800 rounded-lg text-blue-200 text-xs">Note message</div>\n' })}
+                    className="px-2 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] rounded border border-slate-700"
+                  >
+                    + Callout Box
+                  </button>
+                </div>
+
+                {/* Editor Content Area */}
+                {editorView === 'editor' && (
+                  <textarea
+                    rows={12}
+                    required
+                    value={formData.contentHtml}
+                    onChange={(e) => setFormData({ ...formData, contentHtml: e.target.value })}
+                    className="w-full p-3.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs font-mono focus:ring-2 focus:ring-primary outline-none leading-relaxed"
+                  />
+                )}
+
+                {editorView === 'preview' && (
+                  <div
+                    className="w-full min-h-[300px] max-h-[420px] overflow-y-auto p-4 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs leading-relaxed space-y-2"
+                    dangerouslySetInnerHTML={{ __html: formData.contentHtml || '<em>No content entered yet</em>' }}
+                  />
+                )}
+
+                {editorView === 'split' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <textarea
+                      rows={12}
+                      required
+                      value={formData.contentHtml}
+                      onChange={(e) => setFormData({ ...formData, contentHtml: e.target.value })}
+                      className="w-full p-3 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs font-mono focus:ring-2 focus:ring-primary outline-none leading-relaxed"
+                    />
+                    <div className="flex flex-col">
+                      <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 mb-1 px-1">
+                        Rendered Output
+                      </div>
+                      <div
+                        className="w-full flex-1 max-h-[280px] overflow-y-auto p-3.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs leading-relaxed space-y-2"
+                        dangerouslySetInnerHTML={{ __html: formData.contentHtml || '<em>Live preview will appear here</em>' }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -440,28 +617,121 @@ export default function AdminPagesManager() {
               </div>
 
               {/* Modal Footer */}
-              <div className="pt-4 border-t border-slate-800 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="px-4 py-2.5 rounded-xl text-slate-400 hover:text-white text-xs transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-600 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5"
-                >
-                  {saving ? (
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Save className="w-3.5 h-3.5" />
-                  )}
-                  Save Page
-                </button>
+              <div className="pt-4 border-t border-slate-800 flex items-center justify-between gap-3">
+                {editingPage && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetchRevisions(editingPage.id);
+                      setRevisionsModalOpen(true);
+                    }}
+                    className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 transition-colors"
+                  >
+                    <History className="w-3.5 h-3.5 text-primary" />
+                    Revision History
+                  </button>
+                )}
+
+                <div className="flex items-center gap-3 ml-auto">
+                  <button
+                    type="button"
+                    onClick={closeModal}
+                    className="px-4 py-2.5 rounded-xl text-slate-400 hover:text-white text-xs transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-600 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5"
+                  >
+                    {saving ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5" />
+                    )}
+                    Save Page
+                  </button>
+                </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Revision History Modal */}
+      {revisionsModalOpen && editingPage && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl">
+            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
+              <h2 className="font-heading font-bold text-base text-white flex items-center gap-2">
+                <History className="w-4 h-4 text-primary" />
+                Revision History: {editingPage.title}
+              </h2>
+              <button
+                onClick={() => setRevisionsModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-3 flex-1">
+              {loadingRevisions ? (
+                <div className="flex items-center justify-center py-12 gap-2 text-slate-400 text-xs">
+                  <RefreshCw className="w-4 h-4 animate-spin text-primary" />
+                  Loading revisions...
+                </div>
+              ) : revisions.length === 0 ? (
+                <div className="text-center py-12 text-slate-500 text-xs">
+                  No previous revisions saved for this page yet. Revisions are created automatically every time a page is updated.
+                </div>
+              ) : (
+                revisions.map((rev) => (
+                  <div
+                    key={rev.id}
+                    className="p-4 rounded-xl bg-slate-800/80 border border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="px-2 py-0.5 rounded bg-primary/20 text-primary-300 font-mono text-[10px] font-bold">
+                          Rev #{rev.revisionNumber}
+                        </span>
+                        <span className="text-white text-xs font-semibold">{rev.title}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 flex items-center gap-3">
+                        <span>Slug: {rev.slug}</span>
+                        <span>Saved: {new Date(rev.createdAt).toLocaleString()}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={revertingRevId === rev.id}
+                      onClick={() => handleRevert(rev.id)}
+                      className="px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors self-end sm:self-center shrink-0"
+                    >
+                      {revertingRevId === rev.id ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                      )}
+                      Revert to this snapshot
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="px-6 py-3 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setRevisionsModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

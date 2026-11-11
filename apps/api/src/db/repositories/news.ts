@@ -7,6 +7,9 @@ export interface NewsSourceRecord {
   name: string;
   feedUrl: string;
   isEnabled: boolean;
+  category?: string;
+  lastFetchedAt?: string;
+  createdAt?: string;
 }
 
 export class NewsSourceRepository extends BaseRepository<NewsSourceRecord> {

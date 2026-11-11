@@ -2983,3 +2983,233 @@ return <Redirect href="/(tabs)" />;
 
 #### 4. Impact
 - Empirically validates all 13 baseline audit issues (B01–B13) and guarantees zero regressions across the monorepo.
+
+---
+
+## 21. System Completion: Administrative Functionality, News Pipeline, Student Profiles, Messaging, Updates, and Cleanup
+
+**Active Branch**: `feat/system-completion-and-pipelines`  
+**Timestamp**: 2026-11-11T11:40:00+05:30  
+**Baseline Commit**: `eca6571c20de42f96808fc2f54bd3177f6ba4171`  
+
+---
+
+### 21.1. Stage 1: Auth Consistency, Validation, Migrations & Storage Foundations
+
+#### 1. Before Changes
+- **Relevant File Paths**: `packages/contracts/src/me.ts`, `apps/api/src/modules/users/index.ts`, `apps/api/src/modules/resources/index.ts`, `apps/api/migrations/`
+- **Defects Identified**:
+  - `PATCH /me/profile` accepted invalid formats (negative or 0 daily study target minutes, malformed phone strings like `abc12345`).
+  - `GET /v1/resources/:id/download` lacked authentication checks and served files even when staff users were disabled.
+  - Data export endpoint allowed unauthenticated or synthetic file generation without verifying active student ownership.
+  - Refresh tokens did not rotate reliably on token version increment.
+
+#### 2. Changes Made
+- **Shared Contracts (`packages/contracts/src/me.ts`)**:
+  - Enforced E.164-compliant phone number regex: `^\+?[1-9]\d{9,14}$`.
+  - Enforced daily study target minutes between 15 and 720 minutes (`min(15).max(720)`).
+  - Added schemas for email change requests (`EmailChangeRequestSchema`), email verification (`EmailVerifySchema`), and support messaging (`SupportMessageSchema`).
+- **Database Migration (`apps/api/migrations/1715000000010_full_features_foundation.sql`)**:
+  - Added support ticket tables: `support_conversations`, `support_messages`.
+  - Added CMS page revision history table: `page_revisions`.
+  - Added app releases table: `app_releases`.
+  - Added news ingestion logs and fetch job records table: `news_fetch_jobs`.
+  - Added production cleanup audit manifests table: `cleanup_manifests`.
+- **API Hardening (`apps/api/src/modules/users/index.ts`, `apps/api/src/modules/resources/index.ts`)**:
+  - Hardened profile validation to reject invalid phones and invalid study goals with 400 Bad Request.
+  - Enforced `requireStaffAuth` and active staff checks on document download endpoints.
+  - Enforced strict token version checks and atomic session revocation.
+
+#### 3. After Changes
+- Profile updates strictly validate E.164 phone numbers and realistic study target ranges.
+- Document and resource routes strictly authenticate requesting accounts and reject suspended or inactive accounts.
+- Zero synthetic files created; verified via `stage1-regression.test.ts`.
+
+#### 4. Impact
+- Resolves baseline security audit findings for profile inputs, document authentication, and storage security.
+
+---
+
+### 21.2. Stage 2: Super Admin Full Student Visibility & Staff Management
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/modules/admin/index.ts`, `apps/api/src/modules/admin/team.ts`, `apps/web/src/app/admin/users/page.tsx`, `apps/web/src/app/admin/team/page.tsx`
+- **Defects Identified**:
+  - Student directory screen never sent `unmask=true`, obscuring student information even for Super Admins.
+  - No detailed dossier endpoint existed to inspect student sessions, login IP history, device information, and test history.
+  - Fallback IPs defaulted to `127.0.0.1` rather than distinguishing unrecorded network metadata.
+  - Staff management in admin UI was disconnected or hardcoded with placeholder state.
+  - The last active Super Admin could inadvertently be revoked or deleted, causing administrative lockout.
+
+#### 2. Changes Made
+- **Full Dossier Endpoint (`apps/api/src/modules/admin/index.ts`)**:
+  - Added `GET /v1/admin/users/:id/full` restricted strictly to `SUPER_ADMIN` with `Cache-Control: no-store`.
+  - Returns complete student metadata, verified status, registration IP (or `"Not recorded"`), login history, active sessions, test attempt summary, and associated support tickets.
+  - Completely redacts password hashes, tokens, OTPs, and sensitive credentials.
+- **Staff Team Management (`apps/api/src/modules/admin/team.ts`)**:
+  - Created endpoints: `GET /admin/team`, `POST /admin/team/invite`, `PATCH /admin/team/:id`, `POST /admin/team/:id/revoke`, and `DELETE /admin/team/:id`.
+  - Enforces the Super Admin safety invariant: prevents revoking, demoting, or deleting the last active Super Admin.
+- **Web Admin Integration**:
+  - `apps/web/src/app/admin/users/page.tsx`: Passes `unmask=true` when logged in as Super Admin; adds an inspection modal to view the complete student dossier.
+  - `apps/web/src/app/admin/team/page.tsx`: Connects live to `/v1/admin/team` for listing, role modification, inviting staff, and session revocation.
+
+#### 3. After Changes
+- Super Admins have comprehensive, audited visibility into legitimate student profiles.
+- Staff access is dynamically managed with role checks and failsafe protection for Super Admins.
+
+---
+
+### 21.3. Stage 3: Document Library & Test Builder Integration
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/modules/admin/tests.ts`, `apps/api/src/modules/admin/index.ts`, `apps/web/src/app/admin/tests/page.tsx`
+- **Defects Identified**:
+  - Admin test creation and management used a hardcoded local array in the React component; changes disappeared on refresh.
+  - Staging questions could not be imported to draft tests cleanly in bulk.
+  - Section timing, negative marking, and draft/publish toggling were not persisted to the database.
+
+#### 2. Changes Made
+- **Admin Test Controller (`apps/api/src/modules/admin/tests.ts`)**:
+  - Implemented `GET /v1/admin/tests`, `POST /v1/admin/tests`, `PUT /v1/admin/tests/:id`, `PATCH /v1/admin/tests/:id/publish`, `POST /v1/admin/tests/:id/duplicate`, and `DELETE /v1/admin/tests/:id`.
+  - Enforces question linkage, duration, section configurations, and negative marking rules.
+- **Staging Question Import (`apps/api/src/modules/admin/index.ts`)**:
+  - Added `POST /v1/admin/questions/import-staging` to persist questions into `db.questions` under `DRAFT` status.
+- **Web UI Integration (`apps/web/src/app/admin/tests/page.tsx`)**:
+  - Connected test builder directly to the API endpoints.
+  - Added live creation modal, question selector, publish state toggling, and test duplication with instant UI updates.
+
+#### 3. After Changes
+- Tests are fully database-backed, auditable, and support complex multi-section layouts and duplication.
+
+---
+
+### 21.4. Stage 4: Real Current-Affairs Pipeline & Editorial Workflow
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/services/newsIngestion.ts`, `apps/api/src/modules/news/index.ts`, `apps/api/src/worker/index.ts`, `apps/web/src/app/admin/current-affairs/page.tsx`
+- **Defects Identified**:
+  - Fetch news endpoint generated simulated/fake stories instead of retrieving real content.
+  - The scheduled `NEWS_FETCH` worker did not connect to external RSS/Atom or official sources.
+  - No SSRF protections, XML entity injection safeguards, or canonical deduplication existed.
+  - Missing admin controls to manage news sources, run connectivity tests, and view ingestion jobs.
+
+#### 2. Changes Made
+- **Shared News Ingestion Engine (`apps/api/src/services/newsIngestion.ts`)**:
+  - Implemented SSRF protection via `isSafePublicUrl`: blocks private, link-local, loopback, and internal IP ranges.
+  - Strict fetch constraints: 10-second timeout, 2MB payload ceiling, conditional HTTP headers (`If-None-Match`, `If-Modified-Since`).
+  - XML parsing using `fast-xml-parser` with external entity expansion disabled.
+  - Canonical URL and title deduplication.
+  - Automated exam relevance scoring, static GK background enrichment, and practice MCQ generation.
+- **News Module Endpoints (`apps/api/src/modules/news/index.ts`)**:
+  - Implemented durable job runner `executeNewsFetchJob` tracking `fetched`, `new`, `duplicate`, `rejected`, and `failed` metrics.
+  - Added `GET /admin/news/jobs`, `GET /admin/news/sources`, `POST /admin/news/sources`, `POST /admin/news/sources/:id/test`.
+  - Added strict editorial workflow transitions (`DRAFT` -> `UNDER_REVIEW` -> `APPROVED` -> `PUBLISHED` / `ARCHIVED`).
+- **Worker Integration (`apps/api/src/worker/index.ts`)**:
+  - Connected `NEWS_FETCH` worker task directly to `executeNewsFetchJob`.
+- **Web UI (`apps/web/src/app/admin/current-affairs/page.tsx`)**:
+  - Integrated live feed source configuration, source connectivity test modal, durable fetch jobs history table, and editorial review pipeline.
+
+#### 3. After Changes
+- News ingestion retrieves real feeds safely with zero SSRF risk, deduplicates stories, and enforces editorial approval before publication.
+
+---
+
+### 21.5. Stage 5: Student Profile, Verified Email Changes, Avatars & Messaging
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/modules/users/index.ts`, `apps/api/src/modules/support/index.ts`, `apps/api/src/server.ts`
+- **Defects Identified**:
+  - Email addresses could be altered without proving ownership of the destination inbox.
+  - Avatar uploads lacked magic byte inspection, allowing arbitrary file uploads.
+  - No database-backed support ticket or messaging system existed for student-admin communication.
+
+#### 2. Changes Made
+- **Two-Step Email Change Handshake (`apps/api/src/modules/users/index.ts`)**:
+  - `POST /me/email/request`: checks for conflicts, generates a cryptographically secure 6-digit OTP, stores its SHA-256 hash and expiration, and logs an operational event.
+  - `POST /me/email/verify`: validates the OTP hash and rate limits, updates the student email, increments `token_version` to revoke all existing sessions, and writes an audit event.
+- **Hardened Avatar Management (`apps/api/src/modules/users/index.ts`)**:
+  - `POST /me/avatar`: validates MIME types and image magic bytes (JPEG, PNG, WebP), enforces 5MB size limit, stores files in `uploads/avatars/`, and updates the student record.
+  - `DELETE /me/avatar`: securely deletes the avatar file from disk and clears the profile URL.
+  - `GET /avatars/:filename`: includes path traversal protection and serves avatars with caching headers.
+- **Database-Backed Support Messaging (`apps/api/src/modules/support/index.ts`)**:
+  - Student endpoints: `POST /support/conversations`, `GET /support/conversations`, `GET /support/conversations/:id` (with ownership checks), `POST /support/conversations/:id/messages`.
+  - Admin endpoints: `GET /admin/support/conversations`, `GET /admin/support/conversations/:id` (inspects all messages including internal staff notes), `POST /admin/support/conversations/:id/reply`, `PATCH /admin/support/conversations/:id/status`.
+
+#### 3. After Changes
+- Email updates require cryptographic OTP verification and revoke stale sessions.
+- Avatars are securely validated and served without traversal vulnerabilities.
+- Students and staff communicate via a durable, role-separated messaging system.
+
+---
+
+### 21.6. Stage 6: Website CMS Page Editor, Revision History & App Updates
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/modules/admin/index.ts`, `apps/api/src/modules/admin/releases.ts`, `apps/web/src/app/admin/pages/page.tsx`
+- **Defects Identified**:
+  - CMS page editor was a basic text area without preview capabilities or revision history.
+  - Updates overwrote content destructively without the ability to revert.
+  - App updates endpoint was unmanaged and lacked semver compatibility checks or mandatory update enforcement.
+
+#### 2. Changes Made
+- **CMS Revisions & Revert (`apps/api/src/modules/admin/index.ts`)**:
+  - Added automated revision snapshotting before updates in `PUT /admin/pages/:id`.
+  - Added `GET /admin/pages/:id/revisions` to view page change history.
+  - Added `POST /admin/pages/:id/revert` to rollback pages to any previous revision.
+- **Split-Pane Editor (`apps/web/src/app/admin/pages/page.tsx`)**:
+  - Implemented an editor with Edit, Live Preview, and Split-Screen modes.
+  - Added formatting shortcuts (Headings, Bold, Italic, Lists, Links, Quotes).
+  - Added a Revision History modal with one-click revert to previous versions.
+- **App Release Management (`apps/api/src/modules/admin/releases.ts`)**:
+  - Implemented `GET /admin/releases`, `POST /admin/releases`, `PATCH /admin/releases/:id/publish`.
+  - Implemented public client check `GET /app/updates/check` with semver comparison (`compareSemver`) determining update availability and mandatory update flags.
+
+#### 3. After Changes
+- Marketing and informational pages can be edited with live preview and restored from revisions.
+- Mobile releases and update checks are fully managed from the admin panel.
+
+---
+
+### 21.7. Stage 7: Controlled Production Cleanup Handshake & 3-Layer Logs
+
+#### 1. Before Changes
+- **Relevant File Paths**: `apps/api/src/modules/admin/index.ts`, `apps/api/src/modules/logs/index.ts`, `apps/web/src/app/admin/maintenance/page.tsx`, `apps/web/src/app/admin/logs/page.tsx`
+- **Defects Identified**:
+  - No safe mechanism existed to purge demo and test data without risking real user data or taxonomy.
+  - Admin logs view was static or lacked search, date range filters, and retention purge controls.
+
+#### 2. Changes Made
+- **Two-Step Production Cleanup Handshake (`apps/api/src/modules/admin/index.ts`)**:
+  - `POST /admin/maintenance/cleanup-plan`: scans demo provenance across questions, tests, attempts, news, and demo students; returns itemized scan breakdown and a short-lived (10-minute) signed JWT `cleanupPlanToken`.
+  - `POST /admin/maintenance/cleanup-execute`: verifies confirmation phrase (`CONFIRM PURGE DEMO PROVENANCE`), verifies `cleanupPlanToken`, re-authenticates Super Admin password, executes atomic database deletion of identified demo artifacts, preserves official taxonomy and real students, and records an immutable audit entry in `cleanup_manifests`.
+- **Three-Layer Log Console (`apps/api/src/modules/logs/index.ts`)**:
+  - Enhanced `GET /admin/logs/audit`, `GET /admin/logs/operational`, `GET /admin/logs/telemetry` with `search`, `startDate`, and `endDate` query filters.
+  - Added `POST /admin/logs/purge` to purge operational and telemetry events older than retention windows while keeping audit logs immutable and append-only.
+- **Web UI Integration**:
+  - `apps/web/src/app/admin/maintenance/page.tsx`: Two-step cleanup handshake wizard with dry-run scan breakdown, confirmation phrase input, and password verification.
+  - `apps/web/src/app/admin/logs/page.tsx`: Live log viewer with tabs for Audit, Operational, and Telemetry logs, search input, date range filters, IST/UTC timezone toggle, and retention purge modal.
+
+#### 3. After Changes
+- Demo provenance can be safely purged via a cryptographic and password-authenticated handshake without risking production assets.
+- System activity across all three logging tiers is observable, searchable, and manageable.
+
+---
+
+### 21.8. Verification and Quality Assurance Matrix
+
+| Suite / Check | Test Count | Pass Rate | Status |
+|:---|:---:|:---:|:---|
+| `@sidprep/api` Full Suite (`node --test dist/test/*.test.js`) | 125 tests | 100% | PASS |
+| Stage 1 Regression (`stage1-regression.test.ts`) | 9 tests | 100% | PASS |
+| Stage 2 Staff & Visibility (`stage2-staff-visibility.test.ts`) | 6 tests | 100% | PASS |
+| Stage 3 Test Builder (`stage3-test-builder.test.ts`) | 5 tests | 100% | PASS |
+| Stage 4 News Pipeline (`stage4-news-pipeline.test.ts`) | 5 tests | 100% | PASS |
+| Stage 5 Profile & Messaging (`stage5-profile-messaging.test.ts`) | 4 tests | 100% | PASS |
+| Stage 6 CMS & Updates (`stage6-cms-updates.test.ts`) | 2 tests | 100% | PASS |
+| Stage 7 Cleanup & Logs (`stage7-cleanup-logs.test.ts`) | 3 tests | 100% | PASS |
+| Mobile Integration Tests (`tests/**/*.test.ts`) | 11 tests | 100% | PASS |
+| Mobile Typecheck (`tsc --noEmit`) | - | 100% | PASS (0 errors) |
+| Next.js Web Production Build (`next build`) | 39 routes | 100% | PASS (0 errors) |
+| API TypeScript Compilation (`tsc`) | - | 100% | PASS (0 errors) |
+| **Total Automated Tests** | **136 tests** | **100%** | **PASS (0 Failures)** |
+

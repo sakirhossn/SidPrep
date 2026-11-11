@@ -95,8 +95,14 @@ export const logRoutes: FastifyPluginAsync = async (fastify) => {
    * Layer 1: Immutable append-only audit logs
    */
   fastify.get('/admin/logs/audit', { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'AUDITOR'])] }, async (request, reply) => {
-
-    const { module, action, limit = '50' } = request.query as { module?: string; action?: string; limit?: string };
+    const { module, action, search, startDate, endDate, limit = '50' } = request.query as {
+      module?: string;
+      action?: string;
+      search?: string;
+      startDate?: string;
+      endDate?: string;
+      limit?: string;
+    };
     const lim = Math.max(1, Math.min(200, parseInt(limit, 10)));
 
     let logs = [...db.auditEvents];
@@ -109,6 +115,27 @@ export const logRoutes: FastifyPluginAsync = async (fastify) => {
       logs = logs.filter((l) => l.action.toLowerCase() === action.toLowerCase());
     }
 
+    if (startDate) {
+      const startMs = new Date(startDate).getTime();
+      logs = logs.filter((l) => new Date(l.createdAt).getTime() >= startMs);
+    }
+
+    if (endDate) {
+      const endMs = new Date(endDate).getTime();
+      logs = logs.filter((l) => new Date(l.createdAt).getTime() <= endMs);
+    }
+
+    if (search) {
+      const q = search.toLowerCase();
+      logs = logs.filter(
+        (l) =>
+          l.actorEmail?.toLowerCase().includes(q) ||
+          l.action?.toLowerCase().includes(q) ||
+          l.module?.toLowerCase().includes(q) ||
+          l.targetId?.toLowerCase().includes(q)
+      );
+    }
+
     return reply.send(logs.slice(0, lim));
   });
 
@@ -117,8 +144,15 @@ export const logRoutes: FastifyPluginAsync = async (fastify) => {
    * Layer 2: Operational health, cron jobs, API latency
    */
   fastify.get('/admin/logs/operational', { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'AUDITOR'])] }, async (request, reply) => {
-
-    const { service, level } = request.query as { service?: string; level?: string };
+    const { service, level, search, startDate, endDate, limit = '100' } = request.query as {
+      service?: string;
+      level?: string;
+      search?: string;
+      startDate?: string;
+      endDate?: string;
+      limit?: string;
+    };
+    const lim = Math.max(1, Math.min(200, parseInt(limit, 10)));
     let logs = [...db.operationalEvents];
 
     if (service) {
@@ -129,7 +163,24 @@ export const logRoutes: FastifyPluginAsync = async (fastify) => {
       logs = logs.filter((l) => l.level.toUpperCase() === level.toUpperCase());
     }
 
-    return reply.send(logs.slice(0, 100));
+    if (startDate) {
+      const startMs = new Date(startDate).getTime();
+      logs = logs.filter((l) => new Date(l.createdAt).getTime() >= startMs);
+    }
+
+    if (endDate) {
+      const endMs = new Date(endDate).getTime();
+      logs = logs.filter((l) => new Date(l.createdAt).getTime() <= endMs);
+    }
+
+    if (search) {
+      const q = search.toLowerCase();
+      logs = logs.filter(
+        (l) => l.service.toLowerCase().includes(q) || l.message.toLowerCase().includes(q)
+      );
+    }
+
+    return reply.send(logs.slice(0, lim));
   });
 
   /**
@@ -137,8 +188,15 @@ export const logRoutes: FastifyPluginAsync = async (fastify) => {
    * Layer 3: Filterable student app telemetry
    */
   fastify.get('/admin/logs/telemetry', { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'ANALYST', 'AUDITOR'])] }, async (request, reply) => {
-
-    const { os, eventCode } = request.query as { os?: string; eventCode?: string };
+    const { os, eventCode, search, startDate, endDate, limit = '100' } = request.query as {
+      os?: string;
+      eventCode?: string;
+      search?: string;
+      startDate?: string;
+      endDate?: string;
+      limit?: string;
+    };
+    const lim = Math.max(1, Math.min(200, parseInt(limit, 10)));
     let logs = [...db.appTelemetry];
 
     if (os) {
@@ -149,6 +207,79 @@ export const logRoutes: FastifyPluginAsync = async (fastify) => {
       logs = logs.filter((l) => l.eventCode.toLowerCase().includes(eventCode.toLowerCase()));
     }
 
-    return reply.send(logs.slice(0, 100));
+    if (startDate) {
+      const startMs = new Date(startDate).getTime();
+      logs = logs.filter((l) => new Date(l.createdAt).getTime() >= startMs);
+    }
+
+    if (endDate) {
+      const endMs = new Date(endDate).getTime();
+      logs = logs.filter((l) => new Date(l.createdAt).getTime() <= endMs);
+    }
+
+    if (search) {
+      const q = search.toLowerCase();
+      logs = logs.filter(
+        (l) =>
+          l.eventCode.toLowerCase().includes(q) ||
+          l.appVersion?.toLowerCase().includes(q) ||
+          l.correlationId?.toLowerCase().includes(q)
+      );
+    }
+
+    return reply.send(logs.slice(0, lim));
+  });
+
+  /**
+   * POST /admin/logs/purge
+   * Purge old operational or telemetry logs past retention threshold
+   * Strict invariant: Audit logs are append-only and cannot be purged
+   */
+  fastify.post('/admin/logs/purge', { preHandler: [requireAdminAuth(['SUPER_ADMIN'])] }, async (request, reply) => {
+    const admin = request.admin!;
+    const body = (request.body || {}) as {
+      layer?: 'operational' | 'telemetry' | 'both';
+      olderThanDays?: number;
+    };
+
+    const days = typeof body.olderThanDays === 'number' ? Math.max(1, body.olderThanDays) : 30;
+    const cutoffMs = Date.now() - days * 86400000;
+    const targetLayer = body.layer || 'both';
+
+    let purgedCount = 0;
+
+    if (targetLayer === 'operational' || targetLayer === 'both') {
+      const remaining = db.operationalEvents.filter(
+        (l) => new Date(l.createdAt).getTime() > cutoffMs
+      );
+      purgedCount += db.operationalEvents.length - remaining.length;
+      db.operationalEvents.splice(0, db.operationalEvents.length, ...remaining);
+    }
+
+    if (targetLayer === 'telemetry' || targetLayer === 'both') {
+      const remaining = db.appTelemetry.filter(
+        (l) => new Date(l.createdAt).getTime() > cutoffMs
+      );
+      purgedCount += db.appTelemetry.length - remaining.length;
+      db.appTelemetry.splice(0, db.appTelemetry.length, ...remaining);
+    }
+
+    db.logAudit({
+      actorId: admin.id,
+      actorEmail: admin.email,
+      actorRole: admin.role,
+      module: 'LOG_MANAGEMENT',
+      action: 'PURGE_SYSTEM_LOGS',
+      targetId: targetLayer,
+      changesDiff: { targetLayer, olderThanDays: days, purgedCount },
+      ipAddress: request.ip,
+    });
+
+    return reply.send({
+      success: true,
+      targetLayer,
+      purgedCount,
+      message: `Successfully purged ${purgedCount} log records older than ${days} days. Audit trail remained untouched.`,
+    });
   });
 };

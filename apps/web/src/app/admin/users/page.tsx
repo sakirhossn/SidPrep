@@ -21,6 +21,9 @@ import {
   Clock,
   Eye,
   KeyRound,
+  FileText,
+  MessageSquare,
+  Award,
 } from 'lucide-react';
 import { getApiBaseUrl } from '@/lib/api-client';
 
@@ -66,6 +69,12 @@ export default function AdminUsersPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
+  // Super Admin Full Dossier Modal
+  const [dossierStudentId, setDossierStudentId] = useState<string | null>(null);
+  const [dossierData, setDossierData] = useState<any>(null);
+  const [dossierLoading, setDossierLoading] = useState(false);
+  const [dossierError, setDossierError] = useState<string | null>(null);
+
   const getAdminToken = () => {
     if (typeof window === 'undefined') return '';
     return (
@@ -83,6 +92,7 @@ export default function AdminUsersPage() {
       const base = getApiBaseUrl();
       const token = getAdminToken();
       const params = new URLSearchParams();
+      params.append('unmask', 'true');
       if (searchQuery.trim()) params.append('query', searchQuery.trim());
       if (statusFilter !== 'ALL') params.append('status', statusFilter);
       if (examFilter !== 'ALL') params.append('exam', examFilter);
@@ -117,6 +127,34 @@ export default function AdminUsersPage() {
     setActionReason('');
     setDeleteConfirmText('');
     setError(null);
+  };
+
+  const handleOpenDossier = async (studentId: string) => {
+    setDossierStudentId(studentId);
+    setDossierData(null);
+    setDossierLoading(true);
+    setDossierError(null);
+
+    try {
+      const base = getApiBaseUrl();
+      const token = getAdminToken();
+      const res = await fetch(`${base}/v1/admin/users/${studentId}/full`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Cache-Control': 'no-cache',
+        },
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error?.message || 'Access denied or student not found.');
+      }
+      setDossierData(data);
+    } catch (err: any) {
+      setDossierError(err.message);
+    } finally {
+      setDossierLoading(false);
+    }
   };
 
   const handleExecuteAction = async (e: React.FormEvent) => {
@@ -173,7 +211,7 @@ export default function AdminUsersPage() {
         <div>
           <h1 className="font-heading font-extrabold text-2xl text-white">Student Directory &amp; Session Controls</h1>
           <p className="text-xs text-slate-400 mt-1">
-            Live database query • Privacy-compliant masked PII • Durable suspension, session revocation &amp; GDPR deletion
+            Live database query • Privacy-compliant unmasking for Super Admin • Full Dossier • Durable suspension &amp; revocation
           </p>
         </div>
 
@@ -269,16 +307,20 @@ export default function AdminUsersPage() {
               <thead className="bg-slate-800/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
                 <tr>
                   <th className="py-3 px-4">Student ID &amp; Name</th>
-                  <th className="py-3 px-4">Masked Email &amp; Phone</th>
+                  <th className="py-3 px-4">Email &amp; Mobile</th>
                   <th className="py-3 px-4">Target Exam(s)</th>
                   <th className="py-3 px-4">IP &amp; Device Details</th>
                   <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Account Actions</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 text-slate-300">
                 {students.map((stu) => {
                   const fullName = [stu.firstName, stu.lastName].filter(Boolean).join(' ') || 'Student User';
+                  const displayEmail = stu.email || stu.emailMasked;
+                  const displayPhone = stu.phone || stu.phoneMasked;
+                  const displayIp = stu.lastLoginIp || stu.registrationIp || 'Not recorded';
+
                   return (
                     <tr key={stu.id} className="hover:bg-slate-800/30 transition-colors">
                       <td className="py-3.5 px-4">
@@ -289,8 +331,8 @@ export default function AdminUsersPage() {
                       </td>
 
                       <td className="py-3.5 px-4">
-                        <span className="font-mono text-slate-200 block">{stu.emailMasked}</span>
-                        <span className="font-mono text-[11px] text-slate-500">{stu.phoneMasked}</span>
+                        <span className="font-mono text-slate-200 block">{displayEmail}</span>
+                        <span className="font-mono text-[11px] text-slate-500">{displayPhone}</span>
                       </td>
 
                       <td className="py-3.5 px-4">
@@ -313,7 +355,7 @@ export default function AdminUsersPage() {
                           ) : (
                             <Smartphone className="w-3.5 h-3.5 text-slate-500" />
                           )}
-                          <span className="font-mono">{stu.lastLoginIp || stu.registrationIp || '127.0.0.1'}</span>
+                          <span className="font-mono">{displayIp}</span>
                         </div>
                         <span className="text-[10px] text-slate-500">
                           {stu.lastLoginAt ? new Date(stu.lastLoginAt).toLocaleDateString() : 'N/A'}
@@ -336,6 +378,14 @@ export default function AdminUsersPage() {
 
                       <td className="py-3.5 px-4 text-right">
                         <div className="inline-flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleOpenDossier(stu.id)}
+                            title="View Full Student Dossier (Super Admin)"
+                            className="p-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 transition-colors"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+
                           {stu.status === 'ACTIVE' ? (
                             <button
                               onClick={() => handleOpenAction(stu, 'SUSPEND')}
@@ -380,6 +430,219 @@ export default function AdminUsersPage() {
         )}
       </div>
 
+      {/* Super Admin Full Student Dossier Modal */}
+      {dossierStudentId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl p-6 shadow-2xl text-white max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-indigo-400" />
+                <h3 className="font-heading font-bold text-lg">Authorised Student Dossier (Super Admin View)</h3>
+              </div>
+              <button
+                onClick={() => setDossierStudentId(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {dossierLoading ? (
+              <div className="p-12 flex flex-col items-center justify-center text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin text-indigo-400 mb-2" />
+                <p className="text-xs">Retrieving student identity, sessions, attempts &amp; telemetry...</p>
+              </div>
+            ) : dossierError ? (
+              <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
+                {dossierError}
+              </div>
+            ) : dossierData?.student ? (
+              <div className="space-y-6 text-xs">
+                {/* Profile Overview */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-300 font-bold text-base">
+                      {dossierData.student.firstName?.[0] || 'S'}
+                    </div>
+                    <div>
+                      <h4 className="font-heading font-extrabold text-base text-white">
+                        {[dossierData.student.firstName, dossierData.student.lastName].filter(Boolean).join(' ') || 'Student'}
+                      </h4>
+                      <p className="font-mono text-slate-400 text-[11px]">{dossierData.student.id}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                      dossierData.student.status === 'ACTIVE'
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : dossierData.student.status === 'SUSPENDED'
+                        ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                        : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                    }`}>
+                      {dossierData.student.status}
+                    </span>
+
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                      dossierData.student.isProfileComplete
+                        ? 'bg-indigo-500/10 text-indigo-300 border border-indigo-500/20'
+                        : 'bg-slate-800 text-slate-400'
+                    }`}>
+                      {dossierData.student.isProfileComplete ? 'Profile Complete' : 'Incomplete Profile'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Identity & Contact Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Email Address</span>
+                    <span className="font-mono text-slate-200 block truncate">{dossierData.student.email}</span>
+                    <span className={`text-[10px] ${dossierData.student.isEmailVerified ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {dossierData.student.isEmailVerified ? '✓ Verified' : '⚠ Unverified'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Mobile Number</span>
+                    <span className="font-mono text-slate-200 block truncate">{dossierData.student.phone || 'Not linked'}</span>
+                    <span className={`text-[10px] ${dossierData.student.isPhoneVerified ? 'text-emerald-400' : 'text-slate-500'}`}>
+                      {dossierData.student.isPhoneVerified ? '✓ Verified' : 'Not verified'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Primary Target Exam</span>
+                    <span className="font-bold text-slate-200 uppercase block">{dossierData.student.primaryExamId}</span>
+                    <span className="text-[10px] text-slate-500">Goal: {dossierData.student.dailyGoalMinutes} min/day</span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold block">Registration IP</span>
+                    <span className="font-mono text-slate-200 block">{dossierData.student.registrationIp || 'Not recorded'}</span>
+                    <span className="text-[10px] text-slate-500">Joined: {new Date(dossierData.student.createdAt).toLocaleDateString()}</span>
+                  </div>
+                </div>
+
+                {/* Active Sessions & Device History */}
+                <div className="space-y-2">
+                  <h4 className="font-heading font-bold text-sm text-slate-200 flex items-center gap-2">
+                    <Smartphone className="w-4 h-4 text-indigo-400" />
+                    Active Sessions &amp; Device Telemetry
+                  </h4>
+                  {(!dossierData.student.sessions || dossierData.student.sessions.length === 0) ? (
+                    <p className="text-slate-500 italic p-3 bg-slate-950 rounded-xl">No active or recorded sessions found.</p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-800">
+                      <table className="w-full text-left text-xs bg-slate-950">
+                        <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] border-b border-slate-800">
+                          <tr>
+                            <th className="py-2.5 px-3">IP Address</th>
+                            <th className="py-2.5 px-3">Platform / Device</th>
+                            <th className="py-2.5 px-3">Login Source</th>
+                            <th className="py-2.5 px-3">Created</th>
+                            <th className="py-2.5 px-3">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                          {dossierData.student.sessions.map((sess: any) => (
+                            <tr key={sess.id}>
+                              <td className="py-2 px-3 font-mono text-[11px]">{sess.ipAddress || 'Not recorded'}</td>
+                              <td className="py-2 px-3 truncate max-w-xs text-slate-400 text-[11px]">{sess.userAgent}</td>
+                              <td className="py-2 px-3 uppercase text-[10px] font-mono">{sess.loginSource}</td>
+                              <td className="py-2 px-3 text-slate-500 text-[10px]">{new Date(sess.createdAt).toLocaleString()}</td>
+                              <td className="py-2 px-3">
+                                <span className={`text-[10px] font-bold ${sess.isRevoked ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                  {sess.isRevoked ? 'REVOKED' : 'ACTIVE'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Mock Attempt History */}
+                <div className="space-y-2">
+                  <h4 className="font-heading font-bold text-sm text-slate-200 flex items-center gap-2">
+                    <Award className="w-4 h-4 text-emerald-400" />
+                    Preparation &amp; Mock Exam History
+                  </h4>
+                  {(!dossierData.student.attempts || dossierData.student.attempts.length === 0) ? (
+                    <p className="text-slate-500 italic p-3 bg-slate-950 rounded-xl">No mock exam attempts recorded yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-800">
+                      <table className="w-full text-left text-xs bg-slate-950">
+                        <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] border-b border-slate-800">
+                          <tr>
+                            <th className="py-2.5 px-3">Mock Test</th>
+                            <th className="py-2.5 px-3">Score</th>
+                            <th className="py-2.5 px-3">Accuracy</th>
+                            <th className="py-2.5 px-3">Time Spent</th>
+                            <th className="py-2.5 px-3">Submitted At</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                          {dossierData.student.attempts.map((att: any) => (
+                            <tr key={att.id}>
+                              <td className="py-2 px-3 font-semibold text-slate-200">{att.testTitle}</td>
+                              <td className="py-2 px-3 font-mono text-emerald-400">{att.score} / {att.maxMarks}</td>
+                              <td className="py-2 px-3 font-mono">{att.accuracy}%</td>
+                              <td className="py-2 px-3 text-slate-400">{Math.round(att.timeSpentSeconds / 60)} min</td>
+                              <td className="py-2 px-3 text-slate-500">{new Date(att.submittedAt).toLocaleDateString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Support Conversations */}
+                <div className="space-y-2">
+                  <h4 className="font-heading font-bold text-sm text-slate-200 flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-amber-400" />
+                    Support Conversations
+                  </h4>
+                  {(!dossierData.student.conversations || dossierData.student.conversations.length === 0) ? (
+                    <p className="text-slate-500 italic p-3 bg-slate-950 rounded-xl">No support tickets or conversations linked to this student.</p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-800">
+                      <table className="w-full text-left text-xs bg-slate-950">
+                        <thead className="bg-slate-900/60 text-slate-400 uppercase text-[10px] border-b border-slate-800">
+                          <tr>
+                            <th className="py-2.5 px-3">Subject</th>
+                            <th className="py-2.5 px-3">Category</th>
+                            <th className="py-2.5 px-3">Status</th>
+                            <th className="py-2.5 px-3">Last Message</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                          {dossierData.student.conversations.map((conv: any) => (
+                            <tr key={conv.id}>
+                              <td className="py-2 px-3 font-semibold text-slate-200">{conv.subject}</td>
+                              <td className="py-2 px-3 font-mono uppercase text-[10px]">{conv.category}</td>
+                              <td className="py-2 px-3">
+                                <span className="text-[10px] font-bold text-indigo-400 px-2 py-0.5 rounded bg-indigo-500/10">
+                                  {conv.status}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-slate-500">{new Date(conv.last_message_at || conv.created_at).toLocaleDateString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       {/* Action Dialog Modal */}
       {selectedStudent && actionType && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
@@ -406,7 +669,7 @@ export default function AdminUsersPage() {
             </div>
 
             <p className="text-xs text-slate-300 mb-4">
-              Target student: <strong className="font-mono text-white">{selectedStudent.id}</strong> ({selectedStudent.emailMasked}).
+              Target student: <strong className="font-mono text-white">{selectedStudent.id}</strong> ({selectedStudent.email || selectedStudent.emailMasked}).
               {actionType === 'SUSPEND' && ' This will immediately invalidate active tokens and block all protected student requests.'}
               {actionType === 'REVOKE_SESSIONS' && ' This will increment tokenVersion and revoke all current login sessions on all devices.'}
               {actionType === 'DELETE_DATA' && ' WARNING: This permanently anonymizes student personal information, revokes all sessions, and purges credentials.'}

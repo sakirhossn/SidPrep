@@ -233,8 +233,20 @@ export function validateFileMagicBytes(buffer: Buffer, declaredType: string): bo
   }
 
   // JPEG magic byte: FF D8 FF
-  if (declaredType === 'JPEG' || declaredType === 'image/jpeg') {
+  if (declaredType === 'JPEG' || declaredType === 'image/jpeg' || declaredType === 'JPG' || declaredType === 'image/jpg') {
     return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+
+  // WebP magic byte: RIFF....WEBP
+  if (declaredType === 'WEBP' || declaredType === 'image/webp') {
+    if (buffer.length < 12) return false;
+    return (
+      buffer[0] === 0x52 &&
+      buffer[1] === 0x49 &&
+      buffer[2] === 0x46 &&
+      buffer[3] === 0x46 &&
+      buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+    );
   }
 
   // DOCX (ZIP archive magic byte: PK\x03\x04 or 50 4B 03 04)

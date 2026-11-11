@@ -16,6 +16,10 @@ import { userRoutes } from './modules/users/index.js';
 import { logRoutes } from './modules/logs/index.js';
 import { quotaRoutes } from './modules/quotas/index.js';
 import { adminRoutes } from './modules/admin/index.js';
+import { teamRoutes } from './modules/admin/team.js';
+import { adminTestRoutes } from './modules/admin/tests.js';
+import { supportRoutes } from './modules/support/index.js';
+import { releaseRoutes } from './modules/admin/releases.js';
 
 export async function buildServer() {
   await db.init();
@@ -99,6 +103,10 @@ export async function buildServer() {
       await v1.register(userRoutes);
       await v1.register(logRoutes);
       await v1.register(adminRoutes);
+      await v1.register(teamRoutes);
+      await v1.register(adminTestRoutes);
+      await v1.register(supportRoutes);
+      await v1.register(releaseRoutes);
     },
     { prefix: '/v1' }
   );

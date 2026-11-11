@@ -1,9 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
+import crypto from 'node:crypto';
 import { db, QuestionRecord, PageRecord } from '../../db/index.js';
+import { query } from '../../db/pool.js';
 import { requireAdminAuth } from '../../lib/adminAuth.js';
-import { hashPassword, verifyPassword } from '../../lib/security.js';
+import { hashPassword, verifyPassword, signJwt, verifyJwt } from '../../lib/security.js';
 import { sanitizeHtml } from '../../lib/sanitizer.js';
 import { env } from '../../config/index.js';
+
+const memoryRevisions = new Map<string, any[]>();
 
 export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   /**
@@ -144,10 +148,53 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       const stagedCount = items.length;
       const errors: string[] = [];
 
-      items.forEach((item, idx) => {
-        if (!item.text) errors.push(`Row ${idx + 1}: Missing question text`);
-        if (!item.correctOptionId) errors.push(`Row ${idx + 1}: Missing correct option identifier`);
-      });
+      const stagedQuestions: QuestionRecord[] = [];
+
+      for (let idx = 0; idx < items.length; idx++) {
+        const item = items[idx];
+        const rowNum = idx + 1;
+        let hasRowError = false;
+
+        if (!item.text) {
+          errors.push(`Row ${rowNum}: Missing question text`);
+          hasRowError = true;
+        }
+        if (!item.correctOptionId) {
+          errors.push(`Row ${rowNum}: Missing correct option identifier`);
+          hasRowError = true;
+        }
+
+        if (hasRowError) continue;
+
+        const qId = item.id || `q_staged_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        const stagedQ: QuestionRecord = {
+          id: qId,
+          topicId: item.topicId || 'general_awareness',
+          difficulty: item.difficulty || 'MEDIUM',
+          pyqYear: item.pyqYear ? Number(item.pyqYear) : undefined,
+          pyqExam: item.pyqExam || undefined,
+          pyqShift: item.pyqShift || undefined,
+          correctOptionId: item.correctOptionId,
+          createdBy: admin.id,
+          status: 'DRAFT', // Invariant: Never auto-publishes unreviewed imported items
+          translations: item.translations || [
+            {
+              language: 'en',
+              text: item.text,
+              explanation: item.explanation || 'Detailed academic explanation pending editorial review.',
+              options: item.options || [
+                { id: 'opt_1', text: 'Option A' },
+                { id: 'opt_2', text: 'Option B' },
+                { id: 'opt_3', text: 'Option C' },
+                { id: 'opt_4', text: 'Option D' },
+              ],
+            },
+          ],
+        };
+
+        await db.questions.set(qId, stagedQ);
+        stagedQuestions.push(stagedQ);
+      }
 
       db.logAudit({
         actorId: admin.id,
@@ -169,27 +216,6 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     }
   );
 
-  /**
-   * GET /admin/team
-   * List team members with roles and 2FA status
-   * Protected: SUPER_ADMIN, AUDITOR
-   */
-  fastify.get(
-    '/admin/team',
-    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'AUDITOR'])] },
-    async (_request, reply) => {
-      const team = Array.from(db.adminUsers.values()).map((u) => ({
-        id: u.id,
-        email: u.email,
-        name: u.name,
-        role: u.role,
-        is2faEnabled: u.is2faEnabled,
-        isActive: u.isActive,
-        createdAt: u.createdAt,
-      }));
-      return reply.send(team);
-    }
-  );
 
   /**
    * POST /admin/maintenance/purge-demo
@@ -237,6 +263,247 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         message: 'Demo content purged successfully. Official taxonomy and staff accounts preserved.',
         clearedCount: result.clearedCount,
         options,
+      });
+    }
+  );
+
+  /**
+   * POST /admin/maintenance/cleanup-plan
+   * Handshake step 1: Dry run scan for demo provenance, calculate counts, sign short-lived plan token
+   */
+  fastify.post(
+    '/admin/maintenance/cleanup-plan',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN'])] },
+    async (request, reply) => {
+      const admin = request.admin!;
+
+      // Identify demo questions
+      const demoQuestions = Array.from(db.questions.values()).filter(
+        (q) => q.isDemo || q.id.includes('demo')
+      );
+
+      // Identify demo tests
+      const demoTests = Array.from(db.tests.values()).filter(
+        (t) => t.isDemo || t.id.includes('demo')
+      );
+
+      // Identify demo attempts
+      const demoAttempts = Array.from(db.attempts.values()).filter(
+        (a) => a.studentId.includes('demo') || a.testId.includes('demo')
+      );
+
+      // Identify demo news
+      const demoNews = Array.from(db.newsDrafts.values()).filter(
+        (d) => d.sourceName?.includes('demo') || d.id.includes('demo')
+      );
+
+      // Identify demo resources
+      const demoResources = Array.from(db.resources.values()).filter(
+        (r) => r.id.includes('demo')
+      );
+
+      // Identify demo students (students flagged isDemo: true, NEVER real users)
+      const demoStudents = Array.from(db.students.values()).filter(
+        (s) => s.isDemo || s.email.includes('demo')
+      );
+
+      const summary = {
+        questions: demoQuestions.length,
+        tests: demoTests.length,
+        attempts: demoAttempts.length,
+        news: demoNews.length,
+        resources: demoResources.length,
+        demoStudents: demoStudents.length,
+        total:
+          demoQuestions.length +
+          demoTests.length +
+          demoAttempts.length +
+          demoNews.length +
+          demoResources.length +
+          demoStudents.length,
+      };
+
+      const planId = `plan_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+      const token = signJwt(
+        {
+          planId,
+          actorId: admin.id,
+          scope: 'DEMO_PURGE',
+          summary,
+        },
+        '10m',
+        { audience: 'sidprep:admin_api' }
+      );
+
+      db.logAudit({
+        actorId: admin.id,
+        actorEmail: admin.email,
+        actorRole: admin.role,
+        module: 'MAINTENANCE',
+        action: 'GENERATE_CLEANUP_PLAN',
+        targetId: planId,
+        changesDiff: summary,
+        ipAddress: request.ip,
+      });
+
+      return reply.send({
+        success: true,
+        planId,
+        token,
+        summary,
+        expiresInSeconds: 600,
+        message:
+          'Controlled cleanup plan generated. To execute, submit token with super admin password and exact confirmation phrase.',
+      });
+    }
+  );
+
+  /**
+   * POST /admin/maintenance/cleanup-execute
+   * Handshake step 2: Requires signed cleanup plan token, password re-auth, exact confirmation phrase
+   */
+  fastify.post(
+    '/admin/maintenance/cleanup-execute',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN'])] },
+    async (request, reply) => {
+      const admin = request.admin!;
+      const body = (request.body || {}) as {
+        token?: string;
+        password?: string;
+        confirmation?: string;
+      };
+
+      if (body.confirmation !== 'CONFIRM PURGE DEMO PROVENANCE') {
+        return reply.code(400).send({
+          success: false,
+          error: {
+            code: 'CONFIRMATION_MISMATCH',
+            message: 'Exact confirmation phrase CONFIRM PURGE DEMO PROVENANCE is required.',
+          },
+        });
+      }
+
+      if (!body.token) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'TOKEN_REQUIRED', message: 'Cleanup plan token is required.' },
+        });
+      }
+
+      const decoded = verifyJwt<{
+        planId: string;
+        actorId: string;
+        scope: string;
+        summary: any;
+      }>(body.token, { audience: 'sidprep:admin_api' });
+
+      if (!decoded || decoded.scope !== 'DEMO_PURGE' || decoded.actorId !== admin.id) {
+        return reply.code(400).send({
+          success: false,
+          error: {
+            code: 'INVALID_CLEANUP_TOKEN',
+            message: 'Cleanup plan token is invalid, expired, or was issued to a different administrator.',
+          },
+        });
+      }
+
+      // Re-authentication
+      if (!body.password) {
+        return reply.code(401).send({
+          success: false,
+          error: { code: 'PASSWORD_REQUIRED', message: 'Super admin password re-authentication required.' },
+        });
+      }
+
+      const fullAdmin = db.adminUsers.get(admin.id);
+      const isPasswordValid = await verifyPassword(body.password, fullAdmin?.passwordHash || '');
+      if (!isPasswordValid) {
+        return reply.code(401).send({
+          success: false,
+          error: { code: 'INVALID_CREDENTIALS', message: 'Re-authentication password incorrect.' },
+        });
+      }
+
+      // Execute controlled purge
+      // 1. Memory purge
+      const demoQuestions = Array.from(db.questions.values()).filter(
+        (q) => q.isDemo || q.id.includes('demo')
+      );
+      for (const q of demoQuestions) db.questions.delete(q.id);
+
+      const demoTests = Array.from(db.tests.values()).filter(
+        (t) => t.isDemo || t.id.includes('demo')
+      );
+      for (const t of demoTests) db.tests.delete(t.id);
+
+      const demoAttempts = Array.from(db.attempts.values()).filter(
+        (a) => a.studentId.includes('demo') || a.testId.includes('demo')
+      );
+      for (const a of demoAttempts) db.attempts.delete(a.id);
+
+      const demoNews = Array.from(db.newsDrafts.values()).filter(
+        (d) => d.sourceName?.includes('demo') || d.id.includes('demo')
+      );
+      for (const d of demoNews) db.newsDrafts.delete(d.id);
+
+      const demoResources = Array.from(db.resources.values()).filter(
+        (r) => r.id.includes('demo')
+      );
+      for (const r of demoResources) db.resources.delete(r.id);
+
+      const demoStudents = Array.from(db.students.values()).filter(
+        (s) => s.isDemo || s.email.includes('demo')
+      );
+      for (const s of demoStudents) db.students.delete(s.id);
+
+      // 2. PostgreSQL purge
+      try {
+        await query(`DELETE FROM questions WHERE id LIKE '%demo%' OR is_demo = true`);
+        await query(`DELETE FROM tests WHERE id LIKE '%demo%' OR is_demo = true`);
+        await query(`DELETE FROM attempts WHERE student_id LIKE '%demo%' OR test_id LIKE '%demo%'`);
+        await query(`DELETE FROM news_articles WHERE id LIKE '%demo%' OR source_id = 'demo'`);
+        await query(`DELETE FROM resources WHERE id LIKE '%demo%'`);
+        await query(`DELETE FROM students WHERE is_demo = true`);
+      } catch (err: any) {
+        console.warn('[Maintenance] DB cleanup warning:', err.message);
+      }
+
+      // 3. Record audit manifest in cleanup_manifests table
+      const manifestId = `man_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+      try {
+        await query(
+          `INSERT INTO cleanup_manifests (id, actor_id, cleanup_plan_id, scope, records_removed_count, details, created_at)
+           VALUES ($1, $2, $3, 'DEMO_PURGE', $4, $5, NOW())`,
+          [
+            manifestId,
+            admin.id,
+            decoded.planId,
+            decoded.summary.total,
+            JSON.stringify(decoded.summary),
+          ]
+        );
+      } catch (err: any) {
+        console.warn('[Maintenance] Cleanup manifest DB insert warning:', err.message);
+      }
+
+      db.logAudit({
+        actorId: admin.id,
+        actorEmail: admin.email,
+        actorRole: admin.role,
+        module: 'MAINTENANCE',
+        action: 'EXECUTE_CLEANUP_PLAN',
+        targetId: manifestId,
+        changesDiff: { planId: decoded.planId, summary: decoded.summary },
+        ipAddress: request.ip,
+      });
+
+      return reply.send({
+        success: true,
+        manifestId,
+        planId: decoded.planId,
+        deletedCount: decoded.summary.total,
+        summary: decoded.summary,
+        message: 'Controlled production cleanup executed and logged to audit manifest.',
       });
     }
   );
@@ -361,6 +628,33 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         page.slug = body.slug;
       }
 
+      // Snapshot current version as a revision before updating
+      const revId = `rev_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+      const pageRevs = memoryRevisions.get(page.id) || [];
+      const revNumber = pageRevs.length + 1;
+      const revisionRecord = {
+        id: revId,
+        pageId: page.id,
+        slug: page.slug,
+        title: page.title,
+        contentHtml: page.contentHtml,
+        revisionNumber: revNumber,
+        createdBy: admin.id,
+        createdAt: new Date().toISOString(),
+      };
+      pageRevs.unshift(revisionRecord);
+      memoryRevisions.set(page.id, pageRevs);
+
+      try {
+        await query(
+          `INSERT INTO cms_page_revisions (id, page_id, slug, title, content_html, revision_number, created_by, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+          [revId, page.id, page.slug, page.title, page.contentHtml, revNumber, admin.id]
+        );
+      } catch (err: any) {
+        console.warn('[Pages] DB revision insert fallback:', err.message);
+      }
+
       if (body.title !== undefined) page.title = body.title;
       if (body.subtitle !== undefined) page.subtitle = body.subtitle;
       if (body.contentHtml !== undefined) page.contentHtml = sanitizeHtml(body.contentHtml);
@@ -382,6 +676,137 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       });
 
       return reply.send({ success: true, page });
+    }
+  );
+
+  /**
+   * GET /admin/pages/:id/revisions
+   * Retrieve version history for a CMS page
+   */
+  fastify.get(
+    '/admin/pages/:id/revisions',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER'])] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const page = db.pages.get(id) || Array.from(db.pages.values()).find((p) => p.slug === id);
+      if (!page) {
+        return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Page not found' } });
+      }
+
+      try {
+        const res = await query(
+          `SELECT id, page_id as "pageId", slug, title, content_html as "contentHtml",
+                  revision_number as "revisionNumber", created_by as "createdBy", created_at as "createdAt"
+           FROM cms_page_revisions
+           WHERE page_id = $1
+           ORDER BY revision_number DESC`,
+          [page.id]
+        );
+        if (res.rows.length > 0) {
+          return reply.send({ success: true, pageId: page.id, revisions: res.rows });
+        }
+      } catch (err: any) {
+        console.warn('[Pages] DB revisions query fallback:', err.message);
+      }
+
+      const revs = memoryRevisions.get(page.id) || [];
+      return reply.send({ success: true, pageId: page.id, revisions: revs });
+    }
+  );
+
+  /**
+   * POST /admin/pages/:id/revert
+   * Revert a CMS page to a specific prior revision
+   */
+  fastify.post(
+    '/admin/pages/:id/revert',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER'])] },
+    async (request, reply) => {
+      const admin = request.admin!;
+      const { id } = request.params as { id: string };
+      const { revisionId } = (request.body || {}) as { revisionId?: string };
+
+      if (!revisionId) {
+        return reply.code(400).send({ success: false, error: { code: 'REVISION_ID_REQUIRED', message: 'revisionId is required' } });
+      }
+
+      const page = db.pages.get(id) || Array.from(db.pages.values()).find((p) => p.slug === id);
+      if (!page) {
+        return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Page not found' } });
+      }
+
+      let targetRev: any = null;
+      try {
+        const res = await query(
+          `SELECT id, page_id as "pageId", slug, title, content_html as "contentHtml", revision_number as "revisionNumber"
+           FROM cms_page_revisions
+           WHERE page_id = $1 AND id = $2`,
+          [page.id, revisionId]
+        );
+        if (res.rows.length > 0) {
+          targetRev = res.rows[0];
+        }
+      } catch {}
+
+      if (!targetRev) {
+        const revs = memoryRevisions.get(page.id) || [];
+        targetRev = revs.find((r) => r.id === revisionId);
+      }
+
+      if (!targetRev) {
+        return reply.code(404).send({ success: false, error: { code: 'REVISION_NOT_FOUND', message: 'Target revision not found' } });
+      }
+
+      // Snapshot current state before reverting
+      const newRevId = `rev_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+      const pageRevs = memoryRevisions.get(page.id) || [];
+      const newRevNum = pageRevs.length + 1;
+      const preRevertSnapshot = {
+        id: newRevId,
+        pageId: page.id,
+        slug: page.slug,
+        title: page.title,
+        contentHtml: page.contentHtml,
+        revisionNumber: newRevNum,
+        createdBy: admin.id,
+        createdAt: new Date().toISOString(),
+      };
+      pageRevs.unshift(preRevertSnapshot);
+      memoryRevisions.set(page.id, pageRevs);
+
+      try {
+        await query(
+          `INSERT INTO cms_page_revisions (id, page_id, slug, title, content_html, revision_number, created_by, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+          [newRevId, page.id, page.slug, page.title, page.contentHtml, newRevNum, admin.id]
+        );
+      } catch {}
+
+      // Apply reverted contents
+      page.title = targetRev.title;
+      page.contentHtml = targetRev.contentHtml;
+      if (!page.isSystem && targetRev.slug) {
+        page.slug = targetRev.slug;
+      }
+      page.updatedAt = new Date().toISOString();
+      await db.pages.set(page.id, page);
+
+      db.logAudit({
+        actorId: admin.id,
+        actorEmail: admin.email,
+        actorRole: admin.role,
+        module: 'PAGE_CMS',
+        action: 'REVERT_PAGE_REVISION',
+        targetId: page.id,
+        changesDiff: { revisionId, revertedToRevision: targetRev.revisionNumber },
+        ipAddress: request.ip,
+      });
+
+      return reply.send({
+        success: true,
+        message: `Page successfully reverted to revision #${targetRev.revisionNumber}`,
+        page,
+      });
     }
   );
 

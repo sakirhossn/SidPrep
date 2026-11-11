@@ -41,18 +41,19 @@ export const UserProfileSchema = z.object({
 export type UserProfile = z.infer<typeof UserProfileSchema>;
 
 export const UpdateProfileRequestSchema = z.object({
-  name: z.string().optional(),
-  firstName: z.string().optional(),
-  lastName: z.string().optional(),
+  name: z.string().max(100).optional(),
+  firstName: z.string().min(1).max(100).optional(),
+  lastName: z.string().max(100).optional(),
   isSingleName: z.boolean().optional(),
-  phone: z.string().optional(),
-  phoneCountryCode: z.string().optional(),
-  selectedExamIds: z.array(z.string()).optional(),
-  targetExams: z.array(z.string()).optional(),
-  primaryExamId: z.string().optional(),
+  phone: z.string().regex(/^\+?[1-9]\d{9,14}$/, 'Invalid phone number format. Must be 10-15 digits.').optional(),
+  phoneCountryCode: z.string().regex(/^\+[1-9]\d{0,3}$/, 'Invalid country code format (e.g. +91)').optional(),
+  selectedExamIds: z.array(z.string().min(1)).min(1, 'At least one target exam must be selected').optional(),
+  targetExams: z.array(z.string().min(1)).min(1, 'At least one target exam must be selected').optional(),
+  primaryExamId: z.string().min(1).optional(),
   preferredLanguage: SupportedLanguageSchema.optional(),
-  dailyTargetMinutes: z.number().int().min(10).max(480).optional(),
-  dailyGoalMinutes: z.number().int().min(10).max(480).optional(),
+  dailyTargetMinutes: z.number().int().min(15, 'Minimum daily target is 15 minutes').max(720, 'Maximum daily target is 720 minutes').optional(),
+  dailyGoalMinutes: z.number().int().min(15, 'Minimum daily target is 15 minutes').max(720, 'Maximum daily target is 720 minutes').optional(),
+  avatarUrl: z.string().optional(),
   settings: z.object({
     theme: z.enum(['light', 'dark', 'system']).optional(),
     textSizeScale: z.number().min(0.85).max(1.3).optional(),
@@ -64,6 +65,42 @@ export const UpdateProfileRequestSchema = z.object({
   }).optional()
 });
 export type UpdateProfileRequest = z.infer<typeof UpdateProfileRequestSchema>;
+
+export const EmailChangeRequestSchema = z.object({
+  newEmail: z.string().email('Valid new email address is required'),
+});
+export type EmailChangeRequest = z.infer<typeof EmailChangeRequestSchema>;
+
+export const EmailChangeVerifySchema = z.object({
+  newEmail: z.string().email('Valid new email address is required'),
+  otp: z.string().length(6, 'Verification code must be exactly 6 digits'),
+});
+export type EmailChangeVerify = z.infer<typeof EmailChangeVerifySchema>;
+
+export const SupportAttachmentSchema = z.object({
+  filename: z.string().max(255),
+  fileType: z.enum(['PDF', 'JPEG', 'PNG', 'WEBP']),
+  fileSizeBytes: z.number().max(5 * 1024 * 1024, 'Attachment cannot exceed 5 MB'),
+  fileBase64: z.string().optional(),
+  storageKey: z.string().optional(),
+  downloadUrl: z.string().optional(),
+});
+export type SupportAttachment = z.infer<typeof SupportAttachmentSchema>;
+
+export const CreateSupportConversationSchema = z.object({
+  subject: z.string().min(3, 'Subject must be at least 3 characters').max(200),
+  category: z.string().min(2, 'Category is required').max(100),
+  message: z.string().min(1, 'Initial message cannot be empty').max(5000),
+  attachments: z.array(SupportAttachmentSchema).max(3, 'Maximum 3 attachments per message').optional(),
+});
+export type CreateSupportConversation = z.infer<typeof CreateSupportConversationSchema>;
+
+export const AddSupportMessageSchema = z.object({
+  message: z.string().min(1, 'Message cannot be empty').max(5000),
+  attachments: z.array(SupportAttachmentSchema).max(3, 'Maximum 3 attachments per message').optional(),
+  isInternalNote: z.boolean().optional(),
+});
+export type AddSupportMessage = z.infer<typeof AddSupportMessageSchema>;
 
 export const DataExportResponseSchema = z.object({
   downloadUrl: z.string(),

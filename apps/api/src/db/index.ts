@@ -28,8 +28,10 @@ export interface StudentRecord {
   isPhoneVerified?: boolean;
   preferredLanguage: 'en' | 'hi' | 'bn';
   targetExams: string[];
+  selectedExamIds?: string[];
   primaryExamId?: string;
   dailyGoalMinutes: number;
+  dailyTargetMinutes?: number;
   streakDays: number;
   status: 'ACTIVE' | 'SUSPENDED' | 'DELETED';
   isEmailVerified: boolean;
@@ -38,6 +40,12 @@ export interface StudentRecord {
   isDemo?: boolean;
   completedTasks?: string[];
   settings?: Record<string, any>;
+  avatarUrl?: string;
+  avatarStoragePath?: string;
+  pendingEmail?: string;
+  pendingEmailOtpHash?: string;
+  pendingEmailOtpExpiresAt?: string;
+  pendingEmailAttempts?: number;
   registrationIp?: string;
   lastLoginIp?: string;
   lastLoginAt?: string;
@@ -71,6 +79,10 @@ export interface AdminUserRecord {
   is2faEnabled: boolean;
   isActive: boolean;
   tokenVersion?: number;
+  invitedBy?: string;
+  invitationToken?: string;
+  invitationExpiresAt?: string;
+  deactivatedAt?: string;
   createdAt: string;
 }
 
