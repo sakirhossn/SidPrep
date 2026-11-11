@@ -3213,3 +3213,69 @@ return <Redirect href="/(tabs)" />;
 | API TypeScript Compilation (`tsc`) | - | 100% | PASS (0 errors) |
 | **Total Automated Tests** | **136 tests** | **100%** | **PASS (0 Failures)** |
 
+
+
+---
+
+## 22. Competitive-Exam Current Affairs Pipeline, Ingestion Filtering & Interactive Student Portal
+
+### 22.1. Context & Objectives
+To serve competitive exam aspirants (SSC, RRB, WBPSC, IBPS, and state exams), current affairs ingestion cannot blindly ingest or publish raw news feeds. Competitive exams demand:
+1. **Strict Content Selection**: Whitelist high-yield domains (government schemes, appointments, awards, sports, defence exercises, science/tech, summits, indices, economy, environment, and state affairs) while strictly excluding political controversies, routine speeches, local crime, celebrity gossip, tenders, and repetitive clerical notices.
+2. **Draft-Only Gate**: All ingested articles default to `DRAFT` status and cannot be viewed by students until verified by a human editor.
+3. **Structured Exam Conversion**:
+   - Clean, objective headline (stripped of press-release prefixes).
+   - 2-3 sentence factual explanation.
+   - 3 to 5 high-yield exam-relevant facts (figures, ministries, thresholds, dates).
+   - Related static GK background (constitutional articles, statutory acts, headquarters, founding year).
+   - Exactly one reviewed practice MCQ with 4 options (`opt_a`, `opt_b`, `opt_c`, `opt_d`), authoritative answer, and detailed explanation.
+   - Original official source link and event date (`YYYY-MM-DD`).
+4. **Factual Invariant**: Prohibit hallucination or dummy facts to fill quotas. If an article lacks at least 3 verifiable factual pointers or is shorter than 40 words, reject it with explicit audit logging (`itemsRejected`).
+5. **Student Delivery & Daily Quiz**:
+   - Daily Current Affairs digest (`/v1/current-affairs/daily`).
+   - Daily Practice Quiz (`/v1/current-affairs/daily-quiz`) with interactive grading (`/v1/current-affairs/daily-quiz/submit`).
+   - Monthly Revision digest (`/v1/current-affairs/monthly`).
+   - Exam-wise filtering (`SSC`, `RRB`, `WBPSC`, `IBPS`).
+
+### 22.2. Changes Made
+
+#### 1. Database Migrations
+- `apps/api/migrations/1715000000011_competitive_exam_current_affairs.sql`:
+  - Added `static_gk_background`, `practice_mcqs`, `event_date`, `why_it_matters`, `canonical_url`, `exclusion_reason`, `rejection_reason` to `news_drafts`.
+  - Created `daily_quiz_attempts` table.
+  - Added indexes on `event_date`, `editorial_status`, and target exams.
+- `apps/api/migrations/1715000000012_news_articles_review_columns.sql`:
+  - Added `reviewed_by`, `reviewed_at`, `why_it_matters`, `rejection_reason` to `news_articles` to prevent sync schema discrepancies.
+
+#### 2. Selective Ingestion Engine (`apps/api/src/services/newsIngestion.ts`)
+- Implemented `EXCLUSION_PATTERNS` regex matching political arguments, speeches, crime, celebrity gossip, ads, tenders, and clerical notices.
+- Defined `COMPETITIVE_EXAM_DOMAINS` covering all 12 key competitive exam areas with tailored syllabus topics, default exam tags, why-it-matters context, and static GK foundations. Ordered specific domains (`Science & Technology`, `Defence`, `Appointments`, `Awards`, `Sports`, `Government Schemes`, `Economy & Banking`) ahead of broader categories to eliminate misclassification.
+- Implemented `evaluateCompetitiveExamArticle()`: performs blacklist verification, whitelist classification, factual depth check (minimum 3 concrete facts required; rejects insufficient text without hallucinating), extracts 3–5 bullet facts, attaches static GK, and constructs a grounded MCQ.
+- Enhanced feed parsers (`parseFeedXmlDetailed()` and backward-compatible `parseFeedXml()`).
+- Updated durable job runner `executeNewsFetchJob()` to persist eligible items exclusively as `DRAFT` and record itemized counts (`itemsFetched`, `itemsCreated`, `itemsDuplicates`, `itemsRejected`).
+
+#### 3. Backend API Endpoints (`apps/api/src/modules/news/index.ts`)
+- `GET /v1/current-affairs`: Enhanced with `isExamMatched()` supporting prefix and exact matching (`SSC` matches `SSC_CGL`, `SSC_CHSL`, etc.), date and category filters; returns only `PUBLISHED` items.
+- `GET /v1/current-affairs/daily`: Returns daily digest for a specific day and target exam with headline, summary, key facts, static GK, and practice MCQ.
+- `GET /v1/current-affairs/daily-quiz`: Generates practice daily quiz from published MCQs without leaking correct answer options.
+- `POST /v1/current-affairs/daily-quiz/submit`: Grades student submissions and returns score, percentage, and detailed review with answer explanations and key facts.
+- `GET /v1/current-affairs/monthly`: Returns monthly revision digest grouped by category.
+- `PATCH / PUT /v1/admin/news/drafts/:id`: Allows staff editors to edit headline, summary, category, target exams (array), 3–5 key facts, static GK, practice MCQ, event date, and transition editorial status.
+
+#### 4. Web Admin Console (`apps/web/src/app/admin/current-affairs/page.tsx`)
+- Added Exam filter (`ALL`, `SSC`, `RRB`, `WBPSC`, `IBPS`).
+- Rendered exam tag badges on each draft card.
+- Implemented full "Edit & Tags" modal: headline, summary, category, exam tag pills toggle (`SSC`, `RRB`, `WBPSC`, `IBPS`), 3–5 key facts textarea, static GK textarea, practice MCQ (question, options A/B/C/D, correct option dropdown, explanation), and event date picker.
+
+#### 5. Public Student Portal (`apps/web/src/app/current-affairs/page.tsx`)
+- Three distinct tabs:
+  1. **Daily Current Affairs**: Date picker, exam filter, category filter, article cards with factual explanation, 3-5 high-yield pointers, static GK card, official press release link, and interactive practice MCQ expandable runner with instant answer validation.
+  2. **Daily Practice Quiz**: Interactive quiz runner loading daily questions, radio option selection, submission to backend grading endpoint, instant score/percentage display, and question-by-question review with detailed explanations.
+  3. **Monthly Revision Digest**: Categorized revision view grouped by topic for rapid pre-exam preparation.
+
+### 22.3. Verification Results
+- `apps/api/src/test/competitive-exam-current-affairs.test.ts`: **6/6 passed** (blacklist exclusion, whitelist extraction, editor tag & MCQ update, daily current affairs filtering, daily quiz generation & evaluation, and monthly revision).
+- `apps/api/dist/test/stage4-news-pipeline.test.js`: **5/5 passed**.
+- Full API Test Suite: **131/131 passed** across 26 test suites.
+- Next.js Web Production Build: **39/39 routes compiled successfully** (0 errors).
+- Mobile Type Check (`tsc --noEmit`): **0 errors**.
