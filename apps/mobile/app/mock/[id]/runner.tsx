@@ -9,6 +9,7 @@ import { sqliteDb } from '../../../src/services/sqliteDatabase';
 import { telemetry } from '../../../src/services/telemetry';
 import { useTheme } from '../../../src/context/ThemeContext';
 import { useConnectivity } from '../../../src/context/ConnectivityContext';
+import { useAppUpdate } from '../../../src/context/UpdateContext';
 import { TimerBar } from '../../../src/components/TimerBar';
 import { QuestionView } from '../../../src/components/QuestionView';
 import { QuestionPaletteModal } from '../../../src/components/QuestionPaletteModal';
@@ -18,6 +19,14 @@ export default function MockRunnerScreen() {
   const router = useRouter();
   const { theme, scaledFontSize, radii, touchTarget } = useTheme();
   const { isOnline } = useConnectivity();
+  const { setTestSessionActive, setTestSubmitting } = useAppUpdate();
+
+  useEffect(() => {
+    setTestSessionActive(true);
+    return () => {
+      setTestSessionActive(false);
+    };
+  }, [setTestSessionActive]);
 
   const [attempt, setAttempt] = useState<StartAttemptResponse | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -170,6 +179,7 @@ export default function MockRunnerScreen() {
   const performSubmission = async () => {
     if (!attempt) return;
     setSubmitting(true);
+    setTestSubmitting(true);
 
     try {
       const totalTime = Math.floor((Date.now() - startTimeRef.current) / 1000);
@@ -179,12 +189,16 @@ export default function MockRunnerScreen() {
       // Store result in SQLite cache for offline solution review
       await sqliteDb.setCache(`result_${attempt.attemptId}`, result);
 
+      setTestSubmitting(false);
+      setTestSessionActive(false);
+
       router.replace({
         pathname: '/mock/[id]/result',
         params: { id: id as string, attemptId: attempt.attemptId }
       } as any);
     } catch (err: any) {
       setSubmitting(false);
+      setTestSubmitting(false);
       if (err instanceof ApiError && err.isOffline) {
         Alert.alert(
           'Offline Submission Guard',

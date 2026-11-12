@@ -5,6 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider, useTheme } from '../src/context/ThemeContext';
 import { ConnectivityProvider } from '../src/context/ConnectivityContext';
 import { AuthProvider } from '../src/context/AuthContext';
+import { UpdateProvider } from '../src/context/UpdateContext';
 import { AutoUpdateChecker } from '../src/components/AutoUpdateChecker';
 
 function RootNavigation() {
@@ -34,6 +35,7 @@ function RootNavigation() {
         <Stack.Screen name="study-plan" options={{ headerShown: false }} />
         <Stack.Screen name="resources/index" options={{ headerShown: false }} />
         <Stack.Screen name="notifications" options={{ headerShown: false }} />
+        <Stack.Screen name="update" options={{ headerShown: false }} />
       </Stack>
     </>
   );
@@ -45,7 +47,9 @@ export default function RootLayout() {
       <ThemeProvider>
         <ConnectivityProvider>
           <AuthProvider>
-            <RootNavigation />
+            <UpdateProvider>
+              <RootNavigation />
+            </UpdateProvider>
           </AuthProvider>
         </ConnectivityProvider>
       </ThemeProvider>

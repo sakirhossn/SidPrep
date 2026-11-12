@@ -24,6 +24,7 @@ import {
   Globe,
   Trash2,
   User,
+  Smartphone,
 } from 'lucide-react';
 
 // Helper to decode JWT payload safely in browser
@@ -47,12 +48,13 @@ function decodeJwtPayload(token: string): { sub?: string; email?: string; name?:
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const isPublicAdminRoute = pathname === '/admin/login' || pathname === '/admin/reset-password';
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [adminUser, setAdminUser] = useState<{ name: string; role: string; email: string } | null>(null);
-  const [checkingAuth, setCheckingAuth] = useState(pathname !== '/admin/login');
+  const [checkingAuth, setCheckingAuth] = useState(!isPublicAdminRoute);
 
   useEffect(() => {
-    if (pathname === '/admin/login') {
+    if (isPublicAdminRoute) {
       setCheckingAuth(false);
       return;
     }
@@ -124,7 +126,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     setCheckingAuth(false);
   }, [pathname]);
 
-  if (pathname === '/admin/login') {
+  if (isPublicAdminRoute) {
     return <>{children}</>;
   }
 
@@ -142,6 +144,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const navItems = [
     { label: 'Overview', href: '/admin', icon: LayoutDashboard },
     { label: 'Website CMS Pages', href: '/admin/pages', icon: Globe },
+    { label: 'App Releases', href: '/admin/releases', icon: Smartphone },
     { label: 'Exams & Patterns', href: '/admin/exams', icon: GraduationCap },
     { label: 'Taxonomy', href: '/admin/taxonomy', icon: FolderTree },
     { label: 'Question Bank', href: '/admin/questions', icon: HelpCircle },

@@ -9,5 +9,6 @@ export * from './current-affairs.js';
 export * from './study-plan.js';
 export * from './resources.js';
 export * from './notifications.js';
+export * from './releases.js';
 export * from './telemetry.js';
 export * from './schemas.js';

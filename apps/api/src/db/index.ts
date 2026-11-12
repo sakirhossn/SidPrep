@@ -427,10 +427,10 @@ export class SidPrepDatabase {
   }
 
   public appVersion: AppVersionRecord = {
-    currentVersion: '2.0.2',
+    currentVersion: '2.0.3',
     minVersion: '2.0.0',
     apkUrl: 'https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk',
-    releaseNotes: 'SidPrep 2.0.2: Production release with full audit hardening, Brevo OTP integration, dynamic page CMS, and monotonic offline-aware test runner.',
+    releaseNotes: 'SidPrep 2.0.3: Student password login, verified email registration, session controls, and automatic release notifications.',
     publishedAt: new Date().toISOString(),
   };
 

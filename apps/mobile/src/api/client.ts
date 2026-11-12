@@ -22,7 +22,12 @@ import {
   ResourceItem,
   ResourceDownloadTicketResponse,
   NotificationItem,
-  PaginatedResponseSchema
+  PaginatedResponseSchema,
+  UpdateCheckResponse,
+  RegisterPushTokenInput,
+  ReleasePlatform,
+  ReleaseChannel,
+  compareSemver
 } from '@sidprep/contracts';
 
 function resolveDefaultApiUrl(): string {
@@ -470,7 +475,94 @@ export class SidPrepApiClient {
     });
   }
 
-  // 8. In-App Updates & Version Health Check
+  // 8. In-App Updates, Version Health Check & Push Token Registration
+  async checkReleaseUpdates(params: {
+    platform: ReleasePlatform;
+    channel: ReleaseChannel;
+    version: string;
+    buildNumber: number;
+    releaseId?: string;
+  }): Promise<UpdateCheckResponse> {
+    const qs = new URLSearchParams({
+      platform: params.platform,
+      channel: params.channel,
+      version: params.version,
+      build: String(params.buildNumber),
+    });
+    if (params.releaseId) {
+      qs.set('releaseId', params.releaseId);
+    }
+
+    // 1. Query dedicated platform/channel release endpoint
+    try {
+      const res = await this.request<UpdateCheckResponse>(`/app/updates/check?${qs.toString()}`);
+      if (res && typeof res.updateAvailable === 'boolean') {
+        return res;
+      }
+    } catch {
+      // Fall through to legacy endpoint or GitHub fallback
+    }
+
+    // 2. Fallback to legacy /app/version
+    try {
+      const legacy = await this.checkAppVersion();
+      const isNewer = compareSemver(legacy.currentVersion, params.version) > 0;
+      const belowMin = compareSemver(params.version, legacy.minVersion) < 0;
+      return {
+        updateAvailable: isNewer,
+        isMandatory: isNewer && belowMin,
+        belowMinSupported: belowMin,
+        latestRelease: isNewer
+          ? {
+              id: `legacy_${legacy.currentVersion}`,
+              version: legacy.currentVersion,
+              buildNumber: params.buildNumber + 1,
+              platform: params.platform,
+              releaseChannel: params.channel,
+              downloadUrl: legacy.apkUrl,
+              releaseNotes: legacy.releaseNotes,
+              minSupportedVersion: legacy.minVersion,
+              isMandatory: belowMin,
+              otaCompatible: false,
+              requiresNativeBinary: true,
+              publishedAt: legacy.publishedAt,
+            }
+          : undefined,
+      };
+    } catch {
+      throw new Error('Unable to check for updates from server or GitHub releases');
+    }
+  }
+
+  async registerPushToken(payload: RegisterPushTokenInput): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>('/devices/push-token', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async unregisterPushToken(payload: {
+    deviceId: string;
+    platform: ReleasePlatform;
+    invalidateToken?: boolean;
+  }): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>('/devices/push-token/unregister', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async trackReleaseTap(payload: {
+    releaseId: string;
+    deviceId: string;
+    platform: ReleasePlatform;
+  }): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>('/app/updates/tap', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async checkAppVersion(): Promise<{
     currentVersion: string;
     minVersion: string;

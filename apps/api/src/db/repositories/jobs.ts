@@ -70,7 +70,7 @@ export class JobRepository extends Array<JobRunRecord> {
           SET status = 'RUNNING', started_at = NOW()
           FROM claimed
           WHERE jobs.id = claimed.id
-          RETURNING jobs.*;
+          RETURNING jobs.*
         `;
         const res = await client.query(sql);
         if (res.rows && res.rows.length > 0) {
@@ -111,6 +111,50 @@ export class JobRepository extends Array<JobRunRecord> {
       if (job) job.status = 'COMPLETED';
     } catch (err: any) {
       console.error(`[JobRepository] Error completing job ${id}:`, err.message);
+    }
+  }
+
+  public async enqueue(item: JobRunRecord): Promise<boolean> {
+    try {
+      const res = await query(
+        `INSERT INTO jobs (
+          id, job_type, payload, status, scheduled_for, retry_count, last_error, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        ON CONFLICT (id) DO NOTHING`,
+        [
+          item.id,
+          item.jobType,
+          JSON.stringify(item.payload || {}),
+          item.status || 'QUEUED',
+          item.scheduledFor || new Date().toISOString(),
+          item.retryCount || 0,
+          item.lastError || null,
+        ]
+      );
+      if ((res.rowCount || 0) > 0) {
+        super.push(item);
+        return true;
+      }
+      return false;
+    } catch (err: any) {
+      console.error('[JobRepository] Error enqueueing durable job:', err.message);
+      throw err;
+    }
+  }
+
+  public async cancelQueuedJob(id: string, reason = 'CANCELLED'): Promise<void> {
+    try {
+      await query(
+        `UPDATE jobs SET status = 'CANCELLED', last_error = $2 WHERE id = $1 AND status = 'QUEUED'`,
+        [id, reason]
+      );
+      const job = this.find((j) => j.id === id);
+      if (job && job.status === 'QUEUED') {
+        job.status = 'FAILED';
+        job.lastError = reason;
+      }
+    } catch (err: any) {
+      console.error(`[JobRepository] Error cancelling job ${id}:`, err.message);
     }
   }
 

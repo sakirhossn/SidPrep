@@ -2,6 +2,7 @@ import { db } from '../db/index.js';
 import { env } from '../config/index.js';
 import type { JobRunRecord } from '../db/index.js';
 import { executeNewsFetchJob } from '../services/newsIngestion.js';
+import { executeReleaseNotificationJob, processPushRetriesAndReceipts } from '../services/pushNotifications.js';
 
 /**
  * SidPrep Self-Hosted Worker
@@ -85,8 +86,13 @@ export class SidPrepWorker {
     // 2. Publish all approved and due scheduled news drafts (resilient catchup)
     await this.publishScheduledNews();
 
-    // 3. Process any queued async jobs using PostgreSQL FOR UPDATE SKIP LOCKED
-    await this.processNextJob();
+    // 3. Process due push notification retries and verify provider receipts
+    await processPushRetriesAndReceipts();
+
+    // 4. Process any queued async jobs using PostgreSQL FOR UPDATE SKIP LOCKED
+    while (await this.processNextJob()) {
+      // Drain queued jobs cleanly
+    }
   }
 
   public async processNextJob(): Promise<boolean> {
@@ -159,6 +165,20 @@ export class SidPrepWorker {
           meta: { jobId: job.id },
         });
         break;
+
+      case 'RELEASE_NOTIFICATION': {
+        const releaseId = String((job.payload as any)?.releaseId || '');
+        if (!releaseId) {
+          throw new Error('RELEASE_NOTIFICATION job missing payload.releaseId');
+        }
+        await executeReleaseNotificationJob(releaseId, job.id);
+        break;
+      }
+
+      case 'PUSH_RETRY_AND_RECEIPTS': {
+        await processPushRetriesAndReceipts();
+        break;
+      }
 
       default:
         console.log(`[Worker] Completed generic job task: ${job.jobType}`);

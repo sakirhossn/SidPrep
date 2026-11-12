@@ -235,6 +235,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = useCallback(async () => {
     try {
+      const deviceId = await secureStorage.getOrCreateDeviceId();
+      const { getInstalledAppMetadata } = require('../services/releaseNotifications');
+      const meta = getInstalledAppMetadata();
+      await api.unregisterPushToken({
+        deviceId,
+        platform: meta.platform,
+        invalidateToken: false,
+      });
+    } catch {
+      // Best-effort device session detach
+    }
+    try {
       await api.logout();
     } catch {
       // Ignore network errors on logout

@@ -31,6 +31,7 @@ import {
   Laptop,
   Check,
   X,
+  RefreshCw,
 } from 'lucide-react-native';
 import {
   SupportedLanguage,
@@ -42,12 +43,20 @@ import {
 import { api } from '../../src/api/client';
 import { useAuth } from '../../src/context/AuthContext';
 import { useTheme } from '../../src/context/ThemeContext';
+import { useAppUpdate } from '../../src/context/UpdateContext';
 import { Header } from '../../src/components/Header';
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { theme, isDark, themeMode, setThemeMode, fontScale, setFontScale, scaledFontSize, radii, touchTarget } = useTheme();
   const { user, logout, updatePreferences, changePassword } = useAuth();
+  const {
+    installedApp,
+    isChecking: checkingUpdates,
+    permissionStatus,
+    runUpdateCheck,
+    openPermissionPromptFromSettings,
+  } = useAppUpdate();
 
   const [alertsEnabled, setAlertsEnabled] = useState(true);
   const [digestEnabled, setDigestEnabled] = useState(true);
@@ -575,6 +584,67 @@ export default function ProfileScreen() {
               trackColor={{ false: theme.border, true: theme.primary }}
             />
           </View>
+
+          <TouchableOpacity
+            onPress={openPermissionPromptFromSettings}
+            style={[styles.settingRow, { minHeight: touchTarget.minTouchSize }]}
+            accessibilityRole="button"
+          >
+            <View style={styles.rowLeft}>
+              <Bell size={20} color={theme.textMuted} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.rowTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
+                  App Release Notifications
+                </Text>
+                <Text style={[styles.rowSub, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+                  Permission status: {permissionStatus === 'GRANTED' ? 'Enabled' : permissionStatus === 'DENIED' ? 'Disabled in OS Settings' : 'Not Configured'}
+                </Text>
+              </View>
+            </View>
+            <Text style={[styles.editLink, { color: theme.primary, fontSize: scaledFontSize('xs') }]}>
+              {permissionStatus === 'GRANTED' ? 'Enabled' : 'Configure'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* App Updates & Maintenance */}
+        <View style={[styles.sectionCard, { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.lg }]}>
+          <Text style={[styles.sectionHeading, { color: theme.primary, fontSize: scaledFontSize('xs') }]}>
+            APP UPDATES
+          </Text>
+
+          <TouchableOpacity
+            onPress={async () => {
+              const decision = await runUpdateCheck('manual');
+              if (decision.action === 'SHOW_UP_TO_DATE') {
+                Alert.alert('Up to Date', `You are running the latest version (v${installedApp.appVersion}, Build ${installedApp.buildNumber}).`);
+              } else if (decision.action === 'NONE' && decision.reason === 'CHECK_FAILED') {
+                router.push('/update' as any);
+              }
+            }}
+            disabled={checkingUpdates}
+            style={[styles.settingRow, { minHeight: touchTarget.minTouchSize }]}
+            accessibilityRole="button"
+          >
+            <View style={styles.rowLeft}>
+              {checkingUpdates ? (
+                <ActivityIndicator size="small" color={theme.primary} />
+              ) : (
+                <RefreshCw size={20} color={theme.primary} />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.rowTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
+                  Check for updates
+                </Text>
+                <Text style={[styles.rowSub, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+                  Installed: v{installedApp.appVersion} (Build {installedApp.buildNumber}) • {installedApp.platform}/{installedApp.releaseChannel}
+                </Text>
+              </View>
+            </View>
+            <Text style={[styles.editLink, { color: theme.primary, fontSize: scaledFontSize('xs') }]}>
+              Check
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* Data & Compliance */}
@@ -628,7 +698,7 @@ export default function ProfileScreen() {
         {/* App Version Info */}
         <View style={styles.appInfoBox}>
           <Text style={[styles.appVersionText, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
-            SidPrep 2.0 Student App • v2.0.0 (Build 2026.03)
+            SidPrep 2.0 Student App • v{installedApp.appVersion} (Build {installedApp.buildNumber})
           </Text>
           <Text style={[styles.appLegalText, { color: theme.textSubtle, fontSize: scaledFontSize('xs') }]}>
             All exam notices &amp; questions are admin-verified from official exam body gazettes.

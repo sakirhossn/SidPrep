@@ -107,5 +107,22 @@ export const secureStorage = {
 
   async clearRegistrationDraft(): Promise<void> {
     await deleteItem('sidprep_reg_draft');
+  },
+
+  async getOrCreateDeviceId(): Promise<string> {
+    const existing = await getItem('sidprep_device_install_id');
+    if (existing) return existing;
+    const generated = `dev_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    await setItem('sidprep_device_install_id', generated);
+    return generated;
+  },
+
+  async hasExplainedNotifications(): Promise<boolean> {
+    const val = await getItem('sidprep_notif_explained');
+    return val === 'true';
+  },
+
+  async setExplainedNotifications(explained = true): Promise<void> {
+    await setItem('sidprep_notif_explained', explained ? 'true' : 'false');
   }
 };

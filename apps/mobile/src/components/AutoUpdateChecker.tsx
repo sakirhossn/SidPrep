@@ -1,137 +1,158 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Linking, Modal } from 'react-native';
-import Constants from 'expo-constants';
-import { Download, RefreshCw, X, AlertTriangle, Sparkles } from 'lucide-react-native';
-import { api } from '../api/client';
+import React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Modal } from 'react-native';
+import { Download, AlertTriangle, Sparkles, Bell, ShieldCheck } from 'lucide-react-native';
 import { useTheme } from '../context/ThemeContext';
-
-interface VersionInfo {
-  currentVersion: string;
-  minVersion: string;
-  apkUrl: string;
-  releaseNotes: string;
-  publishedAt: string;
-}
-
-function compareVersions(v1: string, v2: string): number {
-  const parts1 = v1.replace(/^v/, '').split('.').map(Number);
-  const parts2 = v2.replace(/^v/, '').split('.').map(Number);
-  const len = Math.max(parts1.length, parts2.length);
-
-  for (let i = 0; i < len; i++) {
-    const num1 = parts1[i] || 0;
-    const num2 = parts2[i] || 0;
-    if (num1 > num2) return 1;
-    if (num1 < num2) return -1;
-  }
-  return 0;
-}
+import { useAppUpdate } from '../context/UpdateContext';
 
 export function AutoUpdateChecker() {
   const { theme } = useTheme();
-  const [updateInfo, setUpdateInfo] = useState<VersionInfo | null>(null);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
-  const localVersion = Constants.expoConfig?.version || '2.0.0';
+  const {
+    installedApp,
+    presentation,
+    showPermissionExplanation,
+    dismissOptionalUpdate,
+    openUpdateAction,
+    acceptPermissionExplanation,
+    declinePermissionExplanation,
+  } = useAppUpdate();
 
-  useEffect(() => {
-    let isMounted = true;
-    const checkForUpdates = async () => {
-      try {
-        const res = await api.checkAppVersion();
-        if (!isMounted || !res?.currentVersion) return;
+  if (showPermissionExplanation) {
+    return (
+      <Modal
+        transparent
+        animationType="fade"
+        visible={true}
+        onRequestClose={declinePermissionExplanation}
+      >
+        <View style={styles.overlay}>
+          <View style={[styles.modalCard, { backgroundColor: theme.surface }]}>
+            <View style={styles.header}>
+              <View style={styles.iconContainer}>
+                <Bell size={24} color="#DFF19B" />
+              </View>
+              <Text style={[styles.title, { color: theme.text }]}>
+                Stay Updated with SidPrep
+              </Text>
+              <Text style={[styles.subCaption, { color: theme.textMuted }]}>
+                App Release Notifications
+              </Text>
+            </View>
 
-        // Check if server version is newer than current running app
-        if (compareVersions(res.currentVersion, localVersion) > 0) {
-          setUpdateInfo(res);
-          setModalVisible(true);
-        }
-      } catch (err) {
-        // Silently skip if offline or server unreachable
-      }
-    };
+            <View style={styles.body}>
+              <Text style={[styles.releaseNotes, { color: theme.text }]}>
+                Allow notifications to be alerted when a new SidPrep update, exam feature, or important test-sync fix is ready. You can continue using the app normally if you choose not to enable them.
+              </Text>
+            </View>
 
-    checkForUpdates();
-    return () => {
-      isMounted = false;
-    };
-  }, [localVersion]);
+            <View style={styles.buttonContainer}>
+              <TouchableOpacity
+                style={[styles.updateButton, { backgroundColor: '#1E3C2C' }]}
+                onPress={acceptPermissionExplanation}
+                activeOpacity={0.8}
+              >
+                <ShieldCheck size={18} color="#ffffff" style={{ marginRight: 8 }} />
+                <Text style={styles.updateButtonText}>Enable Update Alerts</Text>
+              </TouchableOpacity>
 
-  if (!updateInfo || dismissed) return null;
+              <TouchableOpacity
+                style={styles.laterButton}
+                onPress={declinePermissionExplanation}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.laterButtonText, { color: theme.textMuted }]}>
+                  Not Now
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
 
-  const isMandatory = compareVersions(updateInfo.minVersion, localVersion) > 0;
+  if (
+    presentation.action !== 'SHOW_MANDATORY_UPDATE' &&
+    presentation.action !== 'SHOW_OPTIONAL_UPDATE'
+  ) {
+    return null;
+  }
 
-  const handleDownloadUpdate = async () => {
-    const targetUrl = updateInfo.apkUrl || 'https://github.com/sakirhossn/SidPrep/releases/latest/download/SidPrep-Student-release.apk';
-    try {
-      await Linking.openURL(targetUrl);
-    } catch {
-      try {
-        await Linking.openURL('https://github.com/sakirhossn/SidPrep/releases/latest');
-      } catch {
-        Linking.openURL('https://sidprep.in/app');
-      }
-    }
-  };
+  const release = presentation.release;
+  const isMandatory = presentation.action === 'SHOW_MANDATORY_UPDATE';
 
   return (
     <Modal
       transparent
       animationType="fade"
-      visible={modalVisible}
+      visible={true}
       onRequestClose={() => {
-        if (!isMandatory) setDismissed(true);
+        if (!isMandatory) dismissOptionalUpdate(release.id);
       }}
     >
       <View style={styles.overlay}>
         <View style={[styles.modalCard, { backgroundColor: theme.surface }]}>
-          {/* Header */}
           <View style={styles.header}>
             <View style={styles.iconContainer}>
               <Sparkles size={24} color="#DFF19B" />
             </View>
-            <Text style={[styles.title, { color: theme.text }]}>New Update Available</Text>
-            <Text style={[styles.versionBadge, { backgroundColor: '#1E3C2C', color: '#DFF19B' }]}>
-              v{updateInfo.currentVersion} Available (Current: v{localVersion})
+            <Text style={[styles.title, { color: theme.text }]}>
+              {isMandatory ? 'Update Required' : 'New Update Available'}
+            </Text>
+            <Text
+              style={[
+                styles.versionBadge,
+                { backgroundColor: '#1E3C2C', color: '#DFF19B' },
+              ]}
+            >
+              v{release.version} (Build {release.buildNumber}) • Installed: v
+              {installedApp.appVersion}
             </Text>
           </View>
 
-          {/* Release Notes */}
           <View style={styles.body}>
-            <Text style={[styles.notesHeader, { color: theme.textMuted }]}>What's New:</Text>
-            <Text style={[styles.releaseNotes, { color: theme.text }]}>
-              {updateInfo.releaseNotes || 'Bug fixes, performance improvements, and enhanced exam test runner.'}
+            <Text style={[styles.notesHeader, { color: theme.textMuted }]}>
+              What’s New:
             </Text>
+            <Text style={[styles.releaseNotes, { color: theme.text }]}>
+              {release.releaseNotes ||
+                'Bug fixes, security enhancements, and improved exam runner reliability.'}
+            </Text>
+
+            {release.requiresNativeBinary && (
+              <Text style={[styles.installNotice, { color: theme.textMuted }]}>
+                Opens your platform store or package installer and requires OS confirmation to install.
+              </Text>
+            )}
 
             {isMandatory && (
               <View style={styles.mandatoryNotice}>
                 <AlertTriangle size={14} color="#f59e0b" />
                 <Text style={styles.mandatoryText}>
-                  This is a critical update required for syncing exam tests.
+                  This version is below the minimum supported release (v
+                  {release.minSupportedVersion}) or marked critical. Please update to continue safely.
                 </Text>
               </View>
             )}
           </View>
 
-          {/* Action Buttons */}
           <View style={styles.buttonContainer}>
             <TouchableOpacity
               style={[styles.updateButton, { backgroundColor: '#1E3C2C' }]}
-              onPress={handleDownloadUpdate}
+              onPress={() => openUpdateAction(release.downloadUrl)}
               activeOpacity={0.8}
             >
               <Download size={18} color="#ffffff" style={{ marginRight: 8 }} />
-              <Text style={styles.updateButtonText}>Download & Install APK</Text>
+              <Text style={styles.updateButtonText}>Update Now</Text>
             </TouchableOpacity>
 
             {!isMandatory && (
               <TouchableOpacity
                 style={styles.laterButton}
-                onPress={() => setDismissed(true)}
+                onPress={() => dismissOptionalUpdate(release.id)}
                 activeOpacity={0.7}
               >
                 <Text style={[styles.laterButtonText, { color: theme.textMuted }]}>
-                  Remind Me Later
+                  Later
                 </Text>
               </TouchableOpacity>
             )}
@@ -178,18 +199,25 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
     letterSpacing: -0.5,
+    textAlign: 'center',
+  },
+  subCaption: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
   },
   versionBadge: {
     marginTop: 8,
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderRadius: 12,
     overflow: 'hidden',
+    textAlign: 'center',
   },
   body: {
-    marginVertical: 12,
+    marginVertical: 10,
   },
   notesHeader: {
     fontSize: 12,
@@ -201,6 +229,11 @@ const styles = StyleSheet.create({
   releaseNotes: {
     fontSize: 14,
     lineHeight: 20,
+  },
+  installNotice: {
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 10,
   },
   mandatoryNotice: {
     flexDirection: 'row',

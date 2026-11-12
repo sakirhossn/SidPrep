@@ -2,7 +2,7 @@
   "expo": {
     "name": "SidPrep",
     "slug": "sidprep-student",
-    "version": "2.0.2",
+    "version": "2.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "sidprep",
@@ -19,14 +19,15 @@
     },
     "android": {
       "package": "in.sidprep.student",
-      "versionCode": 202,
+      "versionCode": 203,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1E3C2C"
       },
       "permissions": [
         "INTERNET",
-        "ACCESS_NETWORK_STATE"
+        "ACCESS_NETWORK_STATE",
+        "POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -39,13 +40,21 @@
       "expo-font",
       "expo-secure-store",
       "expo-sqlite",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      [
+        "expo-notifications",
+        {
+          "color": "#1E3C2C",
+          "defaultChannel": "app-releases"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
-      "apiBaseUrl": "https://api.sidprep.in/v1"
+      "apiBaseUrl": "https://api.sidprep.in/v1",
+      "releaseChannel": "PRODUCTION"
     }
   }
 }
