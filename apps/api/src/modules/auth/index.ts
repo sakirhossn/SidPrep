@@ -870,6 +870,30 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
     return (fastify as any).inject({ method: 'POST', url: '/v1/auth/student/register', payload: request.body });
   });
 
+  const findActiveStudentByEmail = async (rawEmail: string): Promise<StudentRecord | null> => {
+    const normalized = rawEmail.trim().toLowerCase();
+    let student = Array.from(db.students.values()).find(
+      (s) => s.email.toLowerCase() === normalized && s.status === 'ACTIVE'
+    );
+    if (!student) {
+      try {
+        const res = await query<any>(
+          `SELECT id FROM students WHERE LOWER(email) = LOWER($1) AND status = 'ACTIVE' LIMIT 1`,
+          [normalized]
+        );
+        if (res.rows && res.rows.length > 0) {
+          await db.students.loadFromDb();
+          student = Array.from(db.students.values()).find(
+            (s) => s.email.toLowerCase() === normalized && s.status === 'ACTIVE'
+          );
+        }
+      } catch (err: any) {
+        console.warn('[Auth] Database fallback student query warning:', err.message);
+      }
+    }
+    return student || null;
+  };
+
   /**
    * POST /auth/student/request-password-setup
    * Password setup request for existing OTP-only students
@@ -898,9 +922,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    const student = Array.from(db.students.values()).find(
-      (s) => s.email.toLowerCase() === normalizedEmail && s.status === 'ACTIVE'
-    );
+    const student = await findActiveStudentByEmail(normalizedEmail);
 
     if (!student || student.passwordHash) {
       // Do not reveal whether account exists or already has a password
@@ -947,9 +969,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({ valid: false, state: 'INVALID' });
     }
 
-    const student = Array.from(db.students.values()).find(
-      (s) => s.email.toLowerCase() === email.trim().toLowerCase() && s.status === 'ACTIVE'
-    );
+    const student = await findActiveStudentByEmail(email);
 
     if (!student) {
       return reply.send({ valid: false, state: 'INVALID' });
@@ -1071,9 +1091,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    const student = Array.from(db.students.values()).find(
-      (s) => s.email.toLowerCase() === normalizedEmail && s.status === 'ACTIVE'
-    );
+    const student = await findActiveStudentByEmail(normalizedEmail);
 
     if (!student) {
       return reply.send(genericResponse);
@@ -1119,9 +1137,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({ valid: false, state: 'INVALID' });
     }
 
-    const student = Array.from(db.students.values()).find(
-      (s) => s.email.toLowerCase() === email.trim().toLowerCase() && s.status === 'ACTIVE'
-    );
+    const student = await findActiveStudentByEmail(email);
 
     if (!student) {
       return reply.send({ valid: false, state: 'INVALID' });
@@ -1170,9 +1186,7 @@ export const authRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
-    const student = Array.from(db.students.values()).find(
-      (s) => s.email.toLowerCase() === email.trim().toLowerCase() && s.status === 'ACTIVE'
-    );
+    const student = await findActiveStudentByEmail(email);
 
     if (!student) {
       return reply.code(400).send({

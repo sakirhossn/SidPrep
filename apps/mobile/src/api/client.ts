@@ -339,6 +339,19 @@ export class SidPrepApiClient {
     });
   }
 
+  async validatePasswordResetToken(token: string, email: string): Promise<{ valid: boolean; state?: string }> {
+    return this.request<{ valid: boolean; state?: string }>(
+      `/auth/student/reset-password/validate?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`
+    );
+  }
+
+  async confirmPasswordReset(data: { email: string; resetToken: string; newPassword: string }): Promise<any> {
+    return this.request<any>('/auth/student/reset-password', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+  }
+
   async requestPasswordSetup(email: string): Promise<any> {
     return this.request<any>('/auth/student/request-password-setup', {
       method: 'POST',

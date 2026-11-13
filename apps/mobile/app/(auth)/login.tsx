@@ -10,10 +10,23 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Modal,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Mail, Lock, Eye, EyeOff, ArrowRight, ArrowLeft, GraduationCap, AlertCircle, KeyRound } from 'lucide-react-native';
+import {
+  Mail,
+  Lock,
+  Eye,
+  EyeOff,
+  ArrowRight,
+  ArrowLeft,
+  GraduationCap,
+  AlertCircle,
+  KeyRound,
+  CheckCircle2,
+  X,
+} from 'lucide-react-native';
 import { useAuth } from '../../src/context/AuthContext';
 import { useTheme } from '../../src/context/ThemeContext';
 
@@ -29,6 +42,13 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [passwordNotSet, setPasswordNotSet] = useState(false);
+
+  // Forgot password modal state
+  const [forgotModalVisible, setForgotModalVisible] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotSuccess, setForgotSuccess] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
 
   // Normal Student Email + Password Login
   const handlePasswordLogin = async () => {
@@ -95,53 +115,30 @@ export default function LoginScreen() {
   };
 
   // Student password recovery request
-  const handleForgotPassword = () => {
-    Alert.prompt
-      ? Alert.prompt(
-          'Reset Password',
-          'Enter your registered email address to receive an expiring 15-minute reset link:',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Send Reset Link',
-              onPress: async (enteredEmail?: string) => {
-                const target = enteredEmail || email;
-                if (!target || !target.includes('@')) {
-                  Alert.alert('Invalid Email', 'Please provide a valid registered email.');
-                  return;
-                }
-                try {
-                  await requestPasswordReset(target.trim().toLowerCase());
-                  Alert.alert(
-                    'Reset Link Sent',
-                    'If an eligible account exists for this email address, a password-reset link will be sent.'
-                  );
-                } catch {
-                  Alert.alert(
-                    'Reset Link Sent',
-                    'If an eligible account exists for this email address, a password-reset link will be sent.'
-                  );
-                }
-              },
-            },
-          ],
-          'plain-text',
-          email
-        )
-      : (async () => {
-          if (!email || !email.includes('@')) {
-            Alert.alert('Email Required', 'Please enter your email above to request a reset link.');
-            return;
-          }
-          try {
-            await requestPasswordReset(email.trim().toLowerCase());
-          } finally {
-            Alert.alert(
-              'Reset Link Sent',
-              'If an eligible account exists for this email address, a password-reset link will be sent.'
-            );
-          }
-        })();
+  const handleOpenForgotPassword = () => {
+    setForgotEmail(email.trim());
+    setForgotError(null);
+    setForgotSuccess(false);
+    setForgotModalVisible(true);
+  };
+
+  const handleSubmitForgotPassword = async () => {
+    const target = forgotEmail.trim().toLowerCase();
+    if (!target || !target.includes('@')) {
+      setForgotError('Please enter a valid registered email address.');
+      return;
+    }
+
+    setForgotLoading(true);
+    setForgotError(null);
+    try {
+      await requestPasswordReset(target);
+      setForgotSuccess(true);
+    } catch (err: any) {
+      setForgotError(err?.message || 'Unable to request password reset. Please try again.');
+    } finally {
+      setForgotLoading(false);
+    }
   };
 
   return (
@@ -246,7 +243,7 @@ export default function LoginScreen() {
 
           {/* Forgot Password Link */}
           <View style={styles.forgotRow}>
-            <TouchableOpacity onPress={handleForgotPassword}>
+            <TouchableOpacity onPress={handleOpenForgotPassword} accessibilityLabel="Forgot password">
               <Text style={[styles.forgotLink, { color: theme.primary, fontSize: scaledFontSize('xs') }]}>
                 Forgot password?
               </Text>
@@ -284,6 +281,106 @@ export default function LoginScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Forgot Password Modal */}
+      <Modal
+        visible={forgotModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setForgotModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={[styles.modalCard, { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.xl }]}>
+            <View style={styles.modalHeader}>
+              <View style={[styles.modalIconWrap, { backgroundColor: theme.primary + '18' }]}>
+                <KeyRound size={24} color={theme.primary} />
+              </View>
+              <TouchableOpacity
+                onPress={() => setForgotModalVisible(false)}
+                style={styles.modalCloseBtn}
+                accessibilityLabel="Close forgot password modal"
+              >
+                <X size={20} color={theme.textMuted} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={[styles.modalTitle, { color: theme.text, fontSize: scaledFontSize('xl') }]}>
+              {forgotSuccess ? 'Check Your Inbox' : 'Reset Your Password'}
+            </Text>
+
+            <Text style={[styles.modalSubtitle, { color: theme.textMuted, fontSize: scaledFontSize('sm') }]}>
+              {forgotSuccess
+                ? `If an account is associated with ${forgotEmail}, an official 15-minute reset link has been dispatched to your email.`
+                : 'Enter your registered email address and we will send you an official 15-minute password reset link.'}
+            </Text>
+
+            {forgotError && (
+              <View style={[styles.modalErrorBanner, { backgroundColor: theme.error + '14', borderColor: theme.error + '35' }]}>
+                <AlertCircle size={16} color={theme.error} />
+                <Text style={[styles.modalErrorText, { color: theme.error, fontSize: scaledFontSize('xs') }]}>
+                  {forgotError}
+                </Text>
+              </View>
+            )}
+
+            {!forgotSuccess ? (
+              <>
+                <View style={[styles.inputBox, { borderColor: theme.border, borderRadius: radii.md, backgroundColor: theme.surfaceVariant, marginTop: 16 }]}>
+                  <Mail size={18} color={theme.textMuted} style={styles.inputIcon} />
+                  <TextInput
+                    style={[styles.input, { color: theme.text, fontSize: scaledFontSize('base') }]}
+                    placeholder="student@example.com"
+                    placeholderTextColor={theme.textMuted}
+                    value={forgotEmail}
+                    onChangeText={setForgotEmail}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    autoFocus
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.primaryBtn, { backgroundColor: theme.primary, borderRadius: radii.md, marginTop: 20, minHeight: touchTarget.minTouchSize }]}
+                  onPress={handleSubmitForgotPassword}
+                  disabled={forgotLoading}
+                >
+                  {forgotLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={[styles.primaryBtnText, { fontSize: scaledFontSize('base') }]}>
+                      Send Reset Link
+                    </Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setForgotModalVisible(false)}
+                  style={{ alignItems: 'center', marginTop: 14, paddingVertical: 8 }}
+                >
+                  <Text style={{ color: theme.textMuted, fontSize: scaledFontSize('sm'), fontWeight: '600' }}>
+                    Cancel
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <View style={{ marginTop: 20 }}>
+                <TouchableOpacity
+                  style={[styles.primaryBtn, { backgroundColor: theme.primary, borderRadius: radii.md, minHeight: touchTarget.minTouchSize }]}
+                  onPress={() => setForgotModalVisible(false)}
+                >
+                  <Text style={[styles.primaryBtnText, { fontSize: scaledFontSize('base') }]}>
+                    Return to Sign In
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -405,5 +502,54 @@ const styles = StyleSheet.create({
   promptText: {},
   registerLink: {
     fontWeight: '700',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    padding: 24,
+    borderWidth: 1,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCloseBtn: {
+    padding: 6,
+  },
+  modalTitle: {
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  modalSubtitle: {
+    lineHeight: 20,
+  },
+  modalErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 12,
+    gap: 8,
+  },
+  modalErrorText: {
+    flex: 1,
+    fontWeight: '500',
   },
 });

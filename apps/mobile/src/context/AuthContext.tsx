@@ -18,6 +18,8 @@ interface AuthContextType {
   registerWithPassword: (data: any) => Promise<{ user: any; isProfileComplete?: boolean }>;
   changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) => Promise<any>;
   requestPasswordReset: (email: string) => Promise<any>;
+  validatePasswordResetToken: (token: string, email: string) => Promise<{ valid: boolean; state?: string }>;
+  confirmPasswordReset: (data: { email: string; resetToken: string; newPassword: string }) => Promise<any>;
   requestPasswordSetup: (email: string) => Promise<any>;
   logout: () => Promise<void>;
   updatePreferences: (data: {
@@ -229,6 +231,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return api.requestPasswordReset(email);
   }, []);
 
+  const validatePasswordResetToken = useCallback(async (token: string, email: string) => {
+    return api.validatePasswordResetToken(token, email);
+  }, []);
+
+  const confirmPasswordReset = useCallback(async (data: { email: string; resetToken: string; newPassword: string }) => {
+    return api.confirmPasswordReset(data);
+  }, []);
+
   const requestPasswordSetup = useCallback(async (email: string) => {
     return api.requestPasswordSetup(email);
   }, []);
@@ -315,6 +325,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         registerWithPassword,
         changePassword,
         requestPasswordReset,
+        validatePasswordResetToken,
+        confirmPasswordReset,
         requestPasswordSetup,
         logout,
         updatePreferences,

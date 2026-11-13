@@ -35,6 +35,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
+      SITE_URL: ${SITE_URL:-https://sidprep.in}
       DATABASE_URL: postgresql://${POSTGRES_USER:-sidprep_user}:${POSTGRES_PASSWORD:-REPLACE_ME_POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sidprep_db}
       JWT_SECRET: ${JWT_SECRET:-REPLACE_ME_JWT_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-REPLACE_ME_JWT_REFRESH_SECRET}
