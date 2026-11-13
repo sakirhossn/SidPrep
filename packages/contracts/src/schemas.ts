@@ -37,6 +37,8 @@ export const AdminLoginSchema = z.object({
 export const AdminTotpVerifySchema = z.object({
   preAuthToken: z.string(),
   totpCode: z.string().regex(/^[0-9]{6}$/, 'TOTP code must be 6 digits'),
+  trustDevice: z.boolean().optional(),
+  deviceLabel: z.string().optional(),
 });
 
 // Resource Create / Metadata

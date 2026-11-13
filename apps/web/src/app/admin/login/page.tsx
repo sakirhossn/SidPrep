@@ -36,6 +36,7 @@ export default function AdminLoginPage() {
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotSubmitted, setForgotSubmitted] = useState(false);
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
+  const [trustDevice, setTrustDevice] = useState(true);
 
   // Check backend server connectivity on mount
   useEffect(() => {
@@ -69,6 +70,7 @@ export default function AdminLoginPage() {
       const res = await fetch(`${API_BASE}/v1/auth/admin/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email: email.trim(), password }),
       });
 
@@ -78,12 +80,33 @@ export default function AdminLoginPage() {
         throw new Error(data?.error?.message || 'Invalid administrative credentials.');
       }
 
+      // Fast trusted-device login: skip OTP when 7-day trust is verified by server
+      if (data.otpSkipped && (data.adminToken || data.token)) {
+        const token = data.adminToken || data.token;
+        const adminUser = data.admin || {
+          id: data.id || 'adm_owner',
+          name: data.name || 'Administrator',
+          role: data.role || 'SUPER_ADMIN',
+          email: data.email || email,
+        };
+
+        sessionStorage.setItem('sidprep_admin_token', token);
+        sessionStorage.setItem('sidprep_admin_user', JSON.stringify(adminUser));
+        localStorage.setItem('sidprep_admin_token', token);
+        localStorage.setItem('sidprep_admin_user', JSON.stringify(adminUser));
+
+        router.push('/admin');
+        return;
+      }
+
       setPreAuthToken(data.preAuthToken);
       const masked = data.maskedEmail || (email.trim().length > 3 ? `${email.trim().slice(0, 3)}***@...` : 'your email');
       setMaskedEmail(masked);
       setCountdown(data.resendCooldownSeconds || 180);
 
-      if (data.emailSent) {
+      if (data.reused) {
+        setSuccessMsg(data.message || `An active verification code was already sent to: ${masked}.`);
+      } else if (data.emailSent) {
         setSuccessMsg(`A 6-digit verification code has been sent to your registered email address: ${masked}`);
       } else {
         setSuccessMsg(`Live 2FA session initialized. Verification code sent to: ${masked}`);
@@ -117,6 +140,7 @@ export default function AdminLoginPage() {
       const res = await fetch(`${API_BASE}/v1/auth/admin/send-email-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ preAuthToken, email: email.trim(), password }),
       });
 
@@ -179,7 +203,12 @@ export default function AdminLoginPage() {
       const res = await fetch(`${API_BASE}/v1/auth/admin/verify-totp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ preAuthToken, totpCode: totpCode.trim() }),
+        credentials: 'include',
+        body: JSON.stringify({
+          preAuthToken,
+          totpCode: totpCode.trim(),
+          trustDevice,
+        }),
       });
 
       const data = await res.json().catch(() => null);
@@ -481,6 +510,22 @@ export default function AdminLoginPage() {
                     )}
                   </button>
                 )}
+              </div>
+
+              {/* Trust this device for 7 days */}
+              <div className="pt-1 pb-1">
+                <label className="flex items-start gap-2.5 cursor-pointer select-none group">
+                  <input
+                    type="checkbox"
+                    checked={trustDevice}
+                    onChange={(e) => setTrustDevice(e.target.checked)}
+                    className="mt-0.5 rounded bg-slate-800 border-slate-700 text-primary focus:ring-primary focus:ring-offset-slate-900 w-4 h-4 cursor-pointer"
+                  />
+                  <div className="text-[11px] text-slate-300 group-hover:text-white leading-snug">
+                    <span className="font-semibold block">Trust this device for 7 days</span>
+                    <span className="text-[10px] text-slate-500">Skips verification code on this browser for one week. Sensitive actions still require fresh verification.</span>
+                  </div>
+                </label>
               </div>
 
               <button

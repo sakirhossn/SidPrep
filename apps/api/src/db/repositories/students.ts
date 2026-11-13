@@ -34,6 +34,8 @@ export class StudentRepository extends BaseRepository<StudentRecord> {
           lastLoginAt: row.last_login_at ? new Date(row.last_login_at).toISOString() : undefined,
           lastActivityAt: row.last_activity_at ? new Date(row.last_activity_at).toISOString() : undefined,
           loginSource: row.login_source || 'app',
+          avatarUrl: row.avatar_url || undefined,
+          avatarStoragePath: row.avatar_storage_path || undefined,
           createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
         };
         this.cache[student.id] = student;
@@ -51,10 +53,10 @@ export class StudentRepository extends BaseRepository<StudentRecord> {
         is_phone_verified, preferred_language, target_exams, primary_exam_id,
         daily_goal_minutes, streak_days, status, is_email_verified, is_profile_complete,
         token_version, completed_tasks, settings, registration_ip, last_login_ip,
-        last_login_at, last_activity_at, login_source, created_at, updated_at
+        last_login_at, last_activity_at, login_source, avatar_url, avatar_storage_path, created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, NOW()
+        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, NOW()
       )
       ON CONFLICT (id) DO UPDATE SET
         email = EXCLUDED.email,
@@ -81,6 +83,8 @@ export class StudentRepository extends BaseRepository<StudentRecord> {
         last_login_at = EXCLUDED.last_login_at,
         last_activity_at = EXCLUDED.last_activity_at,
         login_source = EXCLUDED.login_source,
+        avatar_url = EXCLUDED.avatar_url,
+        avatar_storage_path = EXCLUDED.avatar_storage_path,
         updated_at = NOW()`,
       [
         record.id,
@@ -108,6 +112,8 @@ export class StudentRepository extends BaseRepository<StudentRecord> {
         record.lastLoginAt ? new Date(record.lastLoginAt) : null,
         record.lastActivityAt ? new Date(record.lastActivityAt) : null,
         record.loginSource || 'app',
+        record.avatarUrl || null,
+        record.avatarStoragePath || null,
         record.createdAt,
       ]
     );

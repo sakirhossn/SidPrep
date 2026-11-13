@@ -207,6 +207,21 @@ export const teamRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
+      // Fresh MFA check for role change or deactivation
+      const isRoleChange = role !== undefined && role !== targetUser.role;
+      const isDeactivation = isActive === false && targetUser.isActive;
+      if (isRoleChange || isDeactivation) {
+        if (!admin.mfaVerifiedAt || (Date.now() - admin.mfaVerifiedAt) > 600 * 1000) {
+          return reply.code(428).send({
+            success: false,
+            error: {
+              code: 'STEP_UP_MFA_REQUIRED',
+              message: 'Staff role changes and account deactivations require fresh multi-factor verification.',
+            },
+          });
+        }
+      }
+
       // CRITICAL INVARIANT: Prevent demotion or deactivation of last active Super Admin
       if (targetUser.role === 'SUPER_ADMIN') {
         const willBeDemoted = role !== undefined && role !== 'SUPER_ADMIN';
@@ -268,6 +283,15 @@ export const teamRoutes: FastifyPluginAsync = async (fastify) => {
             targetUser.deactivatedAt || null,
           ]
         );
+
+        if (isDeactivation || isRoleChange) {
+          await query(
+            `UPDATE admin_trusted_devices 
+             SET revoked_at = NOW(), revoke_reason = $1 
+             WHERE admin_id = $2 AND revoked_at IS NULL`,
+            [isDeactivation ? 'ACCOUNT_DEACTIVATED' : 'ROLE_CHANGED', id]
+          );
+        }
       } catch (err: any) {
         console.warn('[Team] Failed to update admin_user in PostgreSQL:', err.message);
       }
@@ -344,6 +368,233 @@ export const teamRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({
         success: true,
         message: `All active sessions for '${targetUser.name}' have been revoked immediately.`,
+      });
+    }
+  );
+
+  /**
+   * GET /admin/team/:id/consequences
+   * Inspection of consequences before permanent staff deletion
+   */
+  fastify.get(
+    '/admin/team/:id/consequences',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN'])] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const targetUser = db.adminUsers.get(id);
+      if (!targetUser) {
+        return reply.code(404).send({
+          success: false,
+          error: { code: 'STAFF_NOT_FOUND', message: 'Staff member does not exist.' },
+        });
+      }
+
+      // Check active super admin count
+      const otherActiveSuperAdmins = Array.from(db.adminUsers.values()).filter(
+        (u) => u.id !== id && u.role === 'SUPER_ADMIN' && u.isActive
+      );
+      const isLastSuperAdmin = targetUser.role === 'SUPER_ADMIN' && otherActiveSuperAdmins.length === 0;
+
+      // Query active trusted devices
+      let trustedDevicesCount = 0;
+      try {
+        const tdRes = await query<{ count: string }>(
+          `SELECT count(*) as count FROM admin_trusted_devices WHERE admin_id = $1 AND revoked_at IS NULL AND expires_at > NOW()`,
+          [id]
+        );
+        trustedDevicesCount = parseInt(tdRes.rows[0]?.count || '0', 10);
+      } catch {}
+
+      // Query audit events count
+      let auditEventsCount = 0;
+      try {
+        const aeRes = await query<{ count: string }>(
+          `SELECT count(*) as count FROM audit_events WHERE actor_id = $1`,
+          [id]
+        );
+        auditEventsCount = parseInt(aeRes.rows[0]?.count || '0', 10);
+      } catch {}
+
+      return reply.send({
+        success: true,
+        data: {
+          member: {
+            id: targetUser.id,
+            name: targetUser.name,
+            email: targetUser.email,
+            role: targetUser.role,
+            isActive: targetUser.isActive,
+            createdAt: targetUser.createdAt,
+          },
+          trustedDevicesCount,
+          auditEventsCount,
+          isLastSuperAdmin,
+          consequences: [
+            'Staff record will be permanently deleted from PostgreSQL database.',
+            'All active JWT tokens and sessions will be invalidated immediately.',
+            `${trustedDevicesCount} active 7-day trusted device cookie(s) will be revoked immediately.`,
+            'Pending password reset links and staff invitations will be revoked.',
+            `${auditEventsCount} historical audit log event(s) and exam contributions will be preserved with a deleted-actor tombstone attribution.`,
+            'This action is irreversible. Deleted staff accounts cannot be recovered.',
+          ],
+        },
+      });
+    }
+  );
+
+  /**
+   * DELETE /admin/team/:id/permanent
+   * Super Admin permanently purges a staff account with mandatory recent MFA
+   */
+  fastify.delete(
+    '/admin/team/:id/permanent',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN'])] },
+    async (request, reply) => {
+      const admin = request.admin!;
+      const { id } = request.params as { id: string };
+      const { reason, confirmEmail } = (request.body as { reason?: string; confirmEmail?: string }) || {};
+
+      // 1. Fresh MFA verification (within 600s)
+      if (!admin.mfaVerifiedAt || Date.now() - admin.mfaVerifiedAt > 600 * 1000) {
+        return reply.code(428).send({
+          success: false,
+          error: {
+            code: 'STEP_UP_MFA_REQUIRED',
+            message: 'Permanent staff account deletion requires fresh multi-factor authentication (within 10 minutes).',
+          },
+        });
+      }
+
+      // 2. Validate target existence
+      const targetUser = db.adminUsers.get(id);
+      if (!targetUser) {
+        return reply.code(404).send({
+          success: false,
+          error: { code: 'STAFF_NOT_FOUND', message: 'Staff member does not exist.' },
+        });
+      }
+
+      // 3. Last Super Admin protection
+      if (targetUser.role === 'SUPER_ADMIN') {
+        const otherActiveSuperAdmins = Array.from(db.adminUsers.values()).filter(
+          (u) => u.id !== id && u.role === 'SUPER_ADMIN' && u.isActive
+        );
+        if (otherActiveSuperAdmins.length === 0) {
+          return reply.code(400).send({
+            success: false,
+            error: {
+              code: 'CANNOT_DELETE_LAST_SUPER_ADMIN',
+              message: 'Action prohibited. Cannot permanently delete the last active Super Admin account.',
+            },
+          });
+        }
+      }
+
+      // 4. Validate email confirmation
+      if (!confirmEmail || confirmEmail.trim().toLowerCase() !== targetUser.email.toLowerCase()) {
+        return reply.code(400).send({
+          success: false,
+          error: {
+            code: 'CONFIRMATION_EMAIL_MISMATCH',
+            message: `You must type the exact staff email (${targetUser.email}) to confirm permanent deletion.`,
+          },
+        });
+      }
+
+      // 5. Validate reason
+      if (!reason || reason.trim().length < 5) {
+        return reply.code(400).send({
+          success: false,
+          error: {
+            code: 'REASON_REQUIRED',
+            message: 'A detailed administrative reason (at least 5 characters) is required for permanent staff deletion.',
+          },
+        });
+      }
+
+      const emailRedacted = targetUser.email.replace(/(.{2})(.*)(@.*)/, '$1***$3');
+      const tombstoneId = `tomb_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+      // 6. Execute transactional deletion
+      try {
+        await query('BEGIN');
+
+        // Insert deletion tombstone
+        await query(
+          `INSERT INTO admin_deletion_tombstones (
+            id, deleted_admin_id, email_redacted, role, deleted_by, reason, deleted_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+          [tombstoneId, id, emailRedacted, targetUser.role, admin.id, reason.trim()]
+        );
+
+        // Update historical audit events with deleted-actor attribution
+        await query(
+          `UPDATE audit_events
+           SET actor_status = 'DELETED',
+               deleted_actor_ref = json_build_object(
+                 'tombstone_id', $1::text,
+                 'name', $2::text,
+                 'role', $3::text,
+                 'email_redacted', $4::text,
+                 'deleted_at', NOW()
+               )
+           WHERE actor_id = $5`,
+          [tombstoneId, targetUser.name, targetUser.role, emailRedacted, id]
+        );
+
+        // Revoke trusted devices
+        await query(
+          `DELETE FROM admin_trusted_devices WHERE admin_id = $1`,
+          [id]
+        );
+
+        // Revoke password resets
+        await query(
+          `DELETE FROM admin_password_resets WHERE admin_id = $1`,
+          [id]
+        );
+
+        // Permanently delete admin_users row
+        await query(
+          `DELETE FROM admin_users WHERE id = $1`,
+          [id]
+        );
+
+        await query('COMMIT');
+      } catch (err: any) {
+        await query('ROLLBACK').catch(() => {});
+        console.error('[Team] Permanent deletion transaction failed:', err);
+        return reply.code(500).send({
+          success: false,
+          error: { code: 'DELETION_FAILED', message: `Database transaction failed: ${err.message}` },
+        });
+      }
+
+      // 7. Remove from in-memory cache
+      await db.adminUsers.delete(id);
+
+      // 8. Log deletion in audit log by the deleting Super Admin
+      db.logAudit({
+        actorId: admin.id,
+        actorEmail: admin.email,
+        actorRole: admin.role,
+        module: 'STAFF_MANAGEMENT',
+        action: 'PERMANENTLY_DELETE_STAFF',
+        targetId: id,
+        changesDiff: {
+          deletedAdminId: id,
+          deletedAdminEmail: emailRedacted,
+          deletedAdminRole: targetUser.role,
+          reason: reason.trim(),
+          tombstoneId,
+        },
+        ipAddress: request.ip,
+      });
+
+      return reply.send({
+        success: true,
+        message: `Staff member '${targetUser.name}' (${targetUser.email}) has been permanently deleted from PostgreSQL database.`,
+        tombstoneId,
       });
     }
   );

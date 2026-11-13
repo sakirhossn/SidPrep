@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
-import { X, Download, ShieldCheck, FileText, AlertCircle } from 'lucide-react-native';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Platform } from 'react-native';
+import { X, Download, ShieldCheck, FileText, AlertCircle, ShieldAlert } from 'lucide-react-native';
+import { WebView } from 'react-native-webview';
 import { ResourceItem } from '@sidprep/contracts';
 import { api } from '../api/client';
 import { useTheme } from '../context/ThemeContext';
@@ -50,6 +51,12 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
   const previewTargetUrl = resource.fileType === 'DOCX'
     ? resource.sanitizedDocxPdfPreviewUrl
     : resource.previewUrl;
+
+  const fullPreviewUrl = previewTargetUrl
+    ? previewTargetUrl.startsWith('http')
+      ? previewTargetUrl
+      : `${api.getBaseUrl()}${previewTargetUrl}`
+    : null;
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
@@ -117,27 +124,65 @@ export const FilePreviewModal: React.FC<FilePreviewModalProps> = ({
             </View>
           </View>
 
-          {/* In-App Safe Viewer Canvas */}
+          {/* In-App Safe Viewer Canvas / Embedded WebView */}
+          {fullPreviewUrl && resource.fileType === 'PDF' ? (
+            <View
+              style={[
+                styles.webViewCard,
+                { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.md }
+              ]}
+            >
+              <WebView
+                source={{ uri: fullPreviewUrl }}
+                style={styles.webView}
+                startInLoadingState={true}
+                renderLoading={() => (
+                  <View style={styles.webLoading}>
+                    <ActivityIndicator size="large" color={theme.primary} />
+                    <Text style={{ color: theme.textMuted, fontSize: scaledFontSize('xs'), marginTop: 8 }}>
+                      Streaming document bytes...
+                    </Text>
+                  </View>
+                )}
+                scalesPageToFit={true}
+                originWhitelist={['*']}
+              />
+            </View>
+          ) : (
+            <View
+              style={[
+                styles.viewerCanvas,
+                { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.md }
+              ]}
+            >
+              <FileText size={48} color={theme.primary} />
+              <Text style={[styles.canvasTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
+                {resource.fileType === 'DOCX' ? 'Sanitized DOCX Preview' : 'Progressive Document Viewer'}
+              </Text>
+              <Text style={[styles.canvasNotice, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+                Loaded securely without macro execution or local binary extraction.
+              </Text>
+              {fullPreviewUrl ? (
+                <View style={[styles.streamPill, { backgroundColor: theme.surfaceVariant }]}>
+                  <Text style={[styles.streamText, { color: theme.primary, fontSize: scaledFontSize('xs') }]}>
+                    Secure Channel: {fullPreviewUrl}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          )}
+
+          {/* Screenshot & Digital Protection Notice */}
           <View
             style={[
-              styles.viewerCanvas,
-              { backgroundColor: theme.surface, borderColor: theme.border, borderRadius: radii.md }
+              styles.disclaimerBox,
+              { backgroundColor: theme.surfaceVariant, borderColor: theme.border, borderRadius: radii.sm }
             ]}
           >
-            <FileText size={48} color={theme.primary} />
-            <Text style={[styles.canvasTitle, { color: theme.text, fontSize: scaledFontSize('base') }]}>
-              {resource.fileType === 'DOCX' ? 'Sanitized DOCX Preview' : 'Progressive Document Viewer'}
+            <ShieldAlert size={14} color={theme.textMuted} />
+            <Text style={[styles.disclaimerText, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
+              Digital Protection Notice: Displaying PDF contents on screen cannot guarantee prevention of copying or screenshots. SidPrep enforces token expiration and role-based permissions at the API layer.
             </Text>
-            <Text style={[styles.canvasNotice, { color: theme.textMuted, fontSize: scaledFontSize('xs') }]}>
-              Loaded securely without macro execution or local binary extraction.
-            </Text>
-            {previewTargetUrl ? (
-              <View style={[styles.streamPill, { backgroundColor: theme.surfaceVariant }]}>
-                <Text style={[styles.streamText, { color: theme.primary, fontSize: scaledFontSize('xs') }]}>
-                  Secure Channel: {previewTargetUrl}
-                </Text>
-              </View>
-            ) : null}
           </View>
 
           {/* Download Action Section — Strictly Gated */}
@@ -311,5 +356,32 @@ const styles = StyleSheet.create({
     flex: 1,
     lineHeight: 18,
     fontWeight: '500'
+  },
+  webViewCard: {
+    height: 380,
+    borderWidth: 1,
+    overflow: 'hidden'
+  },
+  webView: {
+    flex: 1
+  },
+  webLoading: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.4)'
+  },
+  disclaimerBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 10,
+    borderWidth: 1,
+    gap: 8,
+    marginTop: 4
+  },
+  disclaimerText: {
+    flex: 1,
+    lineHeight: 16,
+    fontWeight: '400'
   }
 });

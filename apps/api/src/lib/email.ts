@@ -160,66 +160,147 @@ export async function sendStudentOtpEmail(
   });
 }
 
+export interface AdminOtpEmailMetadata {
+  expiryMinutes?: number;
+  requestTime?: string;
+  deviceInfo?: string;
+  ipAddress?: string;
+}
+
 /**
- * Dispatch Admin 2FA Login OTP via email
+ * Dispatch Admin 2FA Login OTP via email (Redesigned per Req 1)
+ * Clean, responsive, high-contrast, accessible layout with device/time info and NO OTP in subject.
  */
 export async function sendAdminOtpEmail(
   adminEmail: string,
-  otp: string
+  otp: string,
+  meta: AdminOtpEmailMetadata = {}
 ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const expiryMinutes = meta.expiryMinutes || 10;
+  const requestTime = meta.requestTime || new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) + ' IST';
+  const deviceInfo = meta.deviceInfo || 'Standard Web Browser';
+  const ipAddress = meta.ipAddress ? ` (IP: ${meta.ipAddress})` : '';
+
   const htmlContent = `
     <!DOCTYPE html>
     <html lang="en">
     <head>
       <meta charset="utf-8">
-      <title>SidPrep Staff Security 2FA Code</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Your SidPrep sign-in verification code</title>
+      <style>
+        @media only screen and (max-width: 600px) {
+          .email-container { width: 100% !important; padding: 16px !important; }
+          .code-box { font-size: 30px !important; letter-spacing: 6px !important; }
+        }
+      </style>
     </head>
-    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #090d16; margin: 0; padding: 24px; color: #f8fafc;">
-      <div style="max-width: 540px; margin: 0 auto; background: #0f172a; border-radius: 16px; border: 1px solid #1e293b; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);">
-        <div style="background-color: #1e1b4b; padding: 24px; border-b: 1px solid #312e81; text-align: center;">
-          <h1 style="color: #ffffff; margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.5px;">
-            SidPrep 2.0 Security Console
-          </h1>
-          <p style="color: #a5b4fc; font-size: 12px; margin: 6px 0 0 0;">Mandatory Staff Two-Factor Authentication</p>
-        </div>
-        
-        <div style="padding: 32px 28px;">
-          <h2 style="color: #f8fafc; font-size: 16px; font-weight: 700; margin-top: 0; margin-bottom: 8px;">
-            Administrative Access Request
-          </h2>
-          <p style="color: #94a3b8; font-size: 13px; line-height: 1.6; margin-top: 0; margin-bottom: 24px;">
-            A staff sign-in attempt was initiated for <strong style="color: #e2e8f0;">${adminEmail}</strong>. Enter the 2FA security code below:
-          </p>
-          
-          <div style="background-color: #1e293b; border: 1.5px solid #6366f1; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px;">
-            <div style="font-family: 'Courier New', Courier, monospace; font-size: 34px; font-weight: 800; letter-spacing: 10px; color: #818cf8;">
-              ${otp}
-            </div>
-            <p style="color: #a5b4fc; font-size: 11px; font-weight: 600; margin: 8px 0 0 0;">
-              STAFF 2FA CODE (EXPIRES IN 5 MINUTES)
-            </p>
-          </div>
-          
-          <p style="color: #64748b; font-size: 11px; line-height: 1.5; margin-bottom: 0;">
-            All administrative sign-in attempts are recorded in the immutable audit ledger. If you did not initiate this request, contact system security immediately.
-          </p>
-        </div>
-        
-        <div style="background-color: #020617; border-top: 1px solid #1e293b; padding: 16px 24px; text-align: center;">
-          <p style="color: #475569; font-size: 11px; margin: 0;">
-            SidPrep 2.0 Security Infrastructure • Automated Delivery via Brevo SMTP Relay
-          </p>
-        </div>
+    <body style="margin: 0; padding: 24px; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #0f172a; -webkit-font-smoothing: antialiased;">
+      <!-- Invisible preheader text for preview windows - no OTP exposed -->
+      <div style="display: none; max-height: 0px; overflow: hidden; opacity: 0; font-size: 1px; line-height: 1px; color: #fff;">
+        Use this verification code to complete your SidPrep administrator sign-in. This code expires in ${expiryMinutes} minutes.
       </div>
+
+      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+          <td align="center">
+            <table role="presentation" class="email-container" border="0" cellpadding="0" cellspacing="0" width="560" style="max-width: 560px; background-color: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);">
+              <!-- Brand Header -->
+              <tr>
+                <td style="background-color: #1e1b4b; padding: 24px 32px; text-align: left; border-bottom: 3px solid #4f46e5;">
+                  <span style="display: inline-block; font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px;">
+                    Sid<span style="color: #818cf8;">Prep</span>
+                  </span>
+                  <span style="display: inline-block; margin-left: 8px; padding: 3px 8px; background-color: rgba(99, 102, 241, 0.2); border: 1px solid #6366f1; border-radius: 6px; color: #c7d2fe; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
+                    Staff Console
+                  </span>
+                </td>
+              </tr>
+
+              <!-- Body Content -->
+              <tr>
+                <td style="padding: 36px 32px 28px 32px;">
+                  <h1 style="margin: 0 0 12px 0; font-size: 20px; font-weight: 800; color: #0f172a; line-height: 1.3;">
+                    Sign-in Verification
+                  </h1>
+                  <p style="margin: 0 0 24px 0; font-size: 14px; line-height: 1.6; color: #334155;">
+                    A sign-in attempt was initiated for your administrator account (<strong style="color: #0f172a;">${adminEmail}</strong>). Enter the verification code below to complete sign-in:
+                  </p>
+
+                  <!-- 6-digit Code Box -->
+                  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 0 0 24px 0;">
+                    <tr>
+                      <td align="center" style="background-color: #f1f5f9; border: 2px dashed #cbd5e1; border-radius: 10px; padding: 22px 16px;">
+                        <div class="code-box" style="font-family: 'SF Mono', Consolas, Monaco, 'Courier New', monospace; font-size: 34px; font-weight: 800; letter-spacing: 10px; color: #312e81; user-select: all;">
+                          ${otp}
+                        </div>
+                        <p style="margin: 8px 0 0 0; font-size: 12px; font-weight: 600; color: #64748b;">
+                          Valid for ${expiryMinutes} minutes
+                        </p>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <!-- Context / Request Details -->
+                  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px; margin: 0 0 24px 0;">
+                    <tr>
+                      <td style="font-size: 12px; line-height: 1.6; color: #475569;">
+                        <strong style="color: #1e293b;">Request Time:</strong> ${requestTime}<br>
+                        <strong style="color: #1e293b;">Device / Browser:</strong> ${deviceInfo}${ipAddress}
+                      </td>
+                    </tr>
+                  </table>
+
+                  <!-- "If this wasn't you" Security Guidance -->
+                  <div style="background-color: #fef2f2; border-left: 4px solid #ef4444; border-radius: 4px; padding: 12px 16px; margin: 0 0 20px 0;">
+                    <p style="margin: 0; font-size: 12px; line-height: 1.6; color: #991b1b;">
+                      <strong>If you did not make this request:</strong> Someone may know your password. Change your administrator password immediately, revoke all active sessions and trusted devices, and alert your Super Admin.
+                    </p>
+                  </div>
+
+                  <p style="margin: 0; font-size: 12px; line-height: 1.5; color: #64748b;">
+                    Never share this code with anyone. SidPrep staff will never ask you for your verification code.
+                  </p>
+                </td>
+              </tr>
+
+              <!-- Clean Footer without SMTP / provider names -->
+              <tr>
+                <td style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 18px 32px; text-align: center;">
+                  <p style="margin: 0; font-size: 11px; color: #64748b; line-height: 1.5;">
+                    SidPrep Educational Platform • Security & Identity Service<br>
+                    This is an automated operational notification.
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     </body>
     </html>
   `;
 
+  const textContent = [
+    'SidPrep Staff Console - Sign-in Verification',
+    '',
+    `Your 6-digit sign-in verification code is: ${otp}`,
+    `This code expires in ${expiryMinutes} minutes.`,
+    '',
+    `Account: ${adminEmail}`,
+    `Request Time: ${requestTime}`,
+    `Device / Browser: ${deviceInfo}${ipAddress}`,
+    '',
+    "If you did not make this request, someone may know your password. Change your password immediately, revoke all trusted devices, and alert your Super Admin.",
+    '',
+    'Never share this code with anyone. SidPrep will never ask for your code.',
+  ].join('\n');
+
   return sendEmail({
     toEmail: adminEmail,
-    subject: `SidPrep Admin 2FA Code: ${otp}`,
+    subject: 'Your SidPrep sign-in verification code',
     htmlContent,
-    textContent: `Your SidPrep 2.0 staff 2FA code is: ${otp}. Valid for 5 minutes.`,
+    textContent,
     isPriorityOtp: true,
   });
 }

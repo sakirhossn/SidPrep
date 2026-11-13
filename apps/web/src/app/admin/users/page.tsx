@@ -26,6 +26,7 @@ import {
   Award,
 } from 'lucide-react';
 import { getApiBaseUrl } from '@/lib/api-client';
+import { StudentAvatar } from '@/components/admin/StudentAvatar';
 
 interface StudentDirectoryRecord {
   id: string;
@@ -37,6 +38,7 @@ interface StudentDirectoryRecord {
   emailMasked: string;
   phoneMasked: string;
   phoneCountryCode?: string;
+  avatarUrl?: string | null;
   targetExams: string[];
   primaryExamId?: string;
   status: 'ACTIVE' | 'SUSPENDED' | 'DELETED';
@@ -324,10 +326,19 @@ export default function AdminUsersPage() {
                   return (
                     <tr key={stu.id} className="hover:bg-slate-800/30 transition-colors">
                       <td className="py-3.5 px-4">
-                        <span className="font-heading font-bold text-slate-100 block">
-                          {fullName}
-                        </span>
-                        <span className="font-mono text-[11px] text-slate-500">{stu.id}</span>
+                        <div className="flex items-center gap-3">
+                          <StudentAvatar
+                            avatarUrl={stu.avatarUrl}
+                            name={fullName}
+                            size="sm"
+                          />
+                          <div>
+                            <span className="font-heading font-bold text-slate-100 block">
+                              {fullName}
+                            </span>
+                            <span className="font-mono text-[11px] text-slate-500">{stu.id}</span>
+                          </div>
+                        </div>
                       </td>
 
                       <td className="py-3.5 px-4">
@@ -461,9 +472,11 @@ export default function AdminUsersPage() {
                 {/* Profile Overview */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl bg-slate-950/60 border border-slate-800">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-full bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-300 font-bold text-base">
-                      {dossierData.student.firstName?.[0] || 'S'}
-                    </div>
+                    <StudentAvatar
+                      avatarUrl={dossierData.student.avatarUrl}
+                      name={[dossierData.student.firstName, dossierData.student.lastName].filter(Boolean).join(' ') || 'Student'}
+                      size="lg"
+                    />
                     <div>
                       <h4 className="font-heading font-extrabold text-base text-white">
                         {[dossierData.student.firstName, dossierData.student.lastName].filter(Boolean).join(' ') || 'Student'}
@@ -668,11 +681,27 @@ export default function AdminUsersPage() {
               </button>
             </div>
 
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-950/80 border border-slate-800 mb-4">
+              <StudentAvatar
+                avatarUrl={selectedStudent.avatarUrl}
+                name={[selectedStudent.firstName, selectedStudent.lastName].filter(Boolean).join(' ') || 'Student User'}
+                size="md"
+              />
+              <div className="min-w-0">
+                <div className="font-heading font-bold text-slate-100 text-xs truncate">
+                  {[selectedStudent.firstName, selectedStudent.lastName].filter(Boolean).join(' ') || 'Student User'}
+                </div>
+                <div className="font-mono text-slate-400 text-[11px] truncate">
+                  {selectedStudent.id} • {selectedStudent.email || selectedStudent.emailMasked}
+                </div>
+              </div>
+            </div>
+
             <p className="text-xs text-slate-300 mb-4">
-              Target student: <strong className="font-mono text-white">{selectedStudent.id}</strong> ({selectedStudent.email || selectedStudent.emailMasked}).
-              {actionType === 'SUSPEND' && ' This will immediately invalidate active tokens and block all protected student requests.'}
-              {actionType === 'REVOKE_SESSIONS' && ' This will increment tokenVersion and revoke all current login sessions on all devices.'}
-              {actionType === 'DELETE_DATA' && ' WARNING: This permanently anonymizes student personal information, revokes all sessions, and purges credentials.'}
+              {actionType === 'SUSPEND' && 'This will immediately invalidate active tokens and block all protected student requests.'}
+              {actionType === 'ACTIVATE' && 'This will restore active access for this student account.'}
+              {actionType === 'REVOKE_SESSIONS' && 'This will increment tokenVersion and revoke all current login sessions on all devices.'}
+              {actionType === 'DELETE_DATA' && 'WARNING: This permanently anonymizes student personal information, revokes all sessions, and purges credentials.'}
             </p>
 
             <form onSubmit={handleExecuteAction} className="space-y-4">

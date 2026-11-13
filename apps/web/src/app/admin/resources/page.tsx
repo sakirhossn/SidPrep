@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { HardDrive, Upload, Eye, Lock, Unlock, CheckCircle2, AlertCircle, FileText, X, Loader2 } from 'lucide-react';
 
 import { getApiBaseUrl } from '@/lib/api-client';
+import { PdfViewerModal } from '@/components/admin/PdfViewerModal';
 
 const API_BASE = getApiBaseUrl();
 
@@ -427,25 +428,24 @@ export default function AdminResourcesPage() {
         </div>
       )}
 
-      {/* Preview Modal */}
+      {/* Integrated PDF Viewer Modal */}
       {activePreview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-xl w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
-              <div>
-                <h3 className="font-heading font-bold text-sm text-white">{activePreview.title}</h3>
-                <span className="text-[10px] text-slate-400">Sandboxed Viewer</span>
-              </div>
-              <button onClick={() => setActivePreview(null)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div
-              className="bg-slate-800/40 p-4 rounded-xl border border-slate-800 text-xs text-slate-200"
-              dangerouslySetInnerHTML={{ __html: activePreview.previewHtml || '<p>Preview available.</p>' }}
-            />
-          </div>
-        </div>
+        <PdfViewerModal
+          isOpen={Boolean(activePreview)}
+          onClose={() => setActivePreview(null)}
+          resourceId={activePreview.id}
+          title={activePreview.title}
+          fileType={activePreview.fileType}
+          streamUrl={`${API_BASE}/v1/admin/resources/${activePreview.id}/preview-stream`}
+          downloadAllowed={activePreview.downloadAllowed}
+          printAllowed={true}
+          isAdmin={true}
+          authToken={
+            typeof window !== 'undefined'
+              ? sessionStorage.getItem('sidprep_admin_token') || localStorage.getItem('sidprep_admin_token') || undefined
+              : undefined
+          }
+        />
       )}
     </div>
   );

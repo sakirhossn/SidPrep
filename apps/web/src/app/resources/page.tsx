@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { FileText, Eye, Download, ShieldAlert, Lock, CheckCircle2, Search, X } from 'lucide-react';
 import { PublicShell } from '@/components/public-shell';
+import { PdfViewerModal } from '@/components/admin/PdfViewerModal';
 
 interface Resource {
   id: string;
@@ -153,8 +154,23 @@ export default function ResourcesPage() {
         ))}
       </div>
 
-      {/* Safe In-Browser Preview Modal */}
-      {activePreview && (
+      {/* Integrated PDF Viewer for PDF resources */}
+      {activePreview && activePreview.fileType === 'PDF' && (
+        <PdfViewerModal
+          isOpen={Boolean(activePreview)}
+          onClose={() => setActivePreview(null)}
+          resourceId={activePreview.id}
+          title={activePreview.title}
+          fileType="PDF"
+          streamUrl={`/v1/downloads/stream/${activePreview.id}?preview=true`}
+          downloadAllowed={activePreview.downloadAllowed}
+          printAllowed={false}
+          isAdmin={false}
+        />
+      )}
+
+      {/* Safe In-Browser Preview Modal for non-PDF files */}
+      {activePreview && activePreview.fileType !== 'PDF' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
             <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">

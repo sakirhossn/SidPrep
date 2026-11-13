@@ -19,6 +19,14 @@ export class QuestionRepository extends BaseRepository<QuestionRecord> {
           correctOptionId: row.correct_option_id,
           createdBy: row.created_by,
           status: (row.status as any) || 'PUBLISHED',
+          externalSourceId: row.external_source_id || undefined,
+          contentFingerprint: row.content_fingerprint || undefined,
+          marks: row.marks != null ? Number(row.marks) : undefined,
+          negativeMarks: row.negative_marks != null ? Number(row.negative_marks) : undefined,
+          marksSource: row.marks_source || undefined,
+          importBatchId: row.import_batch_id || undefined,
+          needsReview: Boolean(row.needs_review),
+          reviewFlags: Array.isArray(row.review_flags) ? row.review_flags : [],
           translations,
         };
         this.cache[question.id] = question;
@@ -32,8 +40,10 @@ export class QuestionRepository extends BaseRepository<QuestionRecord> {
   public async persistInsertOrUpdate(record: QuestionRecord): Promise<void> {
     await query(
       `INSERT INTO questions (
-        id, topic_id, difficulty, pyq_year, pyq_exam, pyq_shift, correct_option_id, created_by, status, translations
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        id, topic_id, difficulty, pyq_year, pyq_exam, pyq_shift, correct_option_id, created_by, status,
+        external_source_id, content_fingerprint, marks, negative_marks, marks_source, import_batch_id,
+        needs_review, review_flags, translations
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       ON CONFLICT (id) DO UPDATE SET
         topic_id = EXCLUDED.topic_id,
         difficulty = EXCLUDED.difficulty,
@@ -43,6 +53,14 @@ export class QuestionRepository extends BaseRepository<QuestionRecord> {
         correct_option_id = EXCLUDED.correct_option_id,
         created_by = EXCLUDED.created_by,
         status = EXCLUDED.status,
+        external_source_id = EXCLUDED.external_source_id,
+        content_fingerprint = EXCLUDED.content_fingerprint,
+        marks = EXCLUDED.marks,
+        negative_marks = EXCLUDED.negative_marks,
+        marks_source = EXCLUDED.marks_source,
+        import_batch_id = EXCLUDED.import_batch_id,
+        needs_review = EXCLUDED.needs_review,
+        review_flags = EXCLUDED.review_flags,
         translations = EXCLUDED.translations`,
       [
         record.id,
@@ -54,6 +72,14 @@ export class QuestionRepository extends BaseRepository<QuestionRecord> {
         record.correctOptionId,
         record.createdBy,
         record.status,
+        record.externalSourceId || null,
+        record.contentFingerprint || null,
+        record.marks != null ? record.marks : null,
+        record.negativeMarks != null ? record.negativeMarks : null,
+        record.marksSource || null,
+        record.importBatchId || null,
+        Boolean(record.needsReview),
+        JSON.stringify(record.reviewFlags || []),
         JSON.stringify(record.translations),
       ]
     );

@@ -21,7 +21,10 @@ import {
   Code2,
   Columns,
   RotateCcw,
+  Check,
 } from 'lucide-react';
+
+import { TiptapEditor } from '@/components/admin/TiptapEditor';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -72,8 +75,56 @@ export default function AdminPagesManager() {
     isPublished: true,
   });
 
+  // Autosave & Local Draft State
+  const [autosaveStatus, setAutosaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [localDraftFound, setLocalDraftFound] = useState<any | null>(null);
+
   // Split / Live Preview Mode
   const [editorView, setEditorView] = useState<'editor' | 'preview' | 'split'>('split');
+
+  // Draft Key for localStorage
+  const draftKey = editingPage
+    ? `sidprep_cms_draft_${editingPage.id}`
+    : isCreating
+    ? 'sidprep_cms_draft_new'
+    : null;
+
+  // Check for existing local draft when modal opens
+  useEffect(() => {
+    if (!draftKey) {
+      setLocalDraftFound(null);
+      return;
+    }
+    try {
+      const stored = localStorage.getItem(draftKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.contentHtml && parsed.contentHtml !== formData.contentHtml) {
+          setLocalDraftFound(parsed);
+        }
+      }
+    } catch {}
+  }, [draftKey, editingPage?.id, isCreating]);
+
+  // Debounced autosave effect
+  useEffect(() => {
+    if (!draftKey || (!isCreating && !editingPage)) return;
+    setAutosaveStatus('saving');
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          draftKey,
+          JSON.stringify({
+            ...formData,
+            savedAt: new Date().toISOString(),
+          })
+        );
+        setAutosaveStatus('saved');
+      } catch {}
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [formData, draftKey, isCreating, editingPage]);
 
   // Revisions State
   const [revisionsModalOpen, setRevisionsModalOpen] = useState(false);
@@ -198,14 +249,19 @@ export default function AdminPagesManager() {
     setIsCreating(false);
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSave = async (e?: React.FormEvent, publishOverride?: boolean) => {
+    if (e) e.preventDefault();
     setSaving(true);
     setError(null);
 
     const token =
       sessionStorage.getItem('sidprep_admin_token') ||
       localStorage.getItem('sidprep_admin_token');
+
+    const finalPayload = {
+      ...formData,
+      isPublished: publishOverride !== undefined ? publishOverride : formData.isPublished,
+    };
 
     try {
       if (isCreating) {
@@ -215,7 +271,7 @@ export default function AdminPagesManager() {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify(formData),
+          body: JSON.stringify(finalPayload),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error?.message || 'Failed to create page');
@@ -227,13 +283,20 @@ export default function AdminPagesManager() {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify(formData),
+          body: JSON.stringify(finalPayload),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error?.message || 'Failed to update page');
         setSuccess(`Page '${formData.title}' updated successfully.`);
       }
 
+      if (draftKey) {
+        try {
+          localStorage.removeItem(draftKey);
+        } catch {}
+      }
+      setLocalDraftFound(null);
+      setAutosaveStatus('idle');
       closeModal();
       fetchPages();
     } catch (err: any) {
@@ -406,13 +469,29 @@ export default function AdminPagesManager() {
       {/* Edit / Create Modal */}
       {(isCreating || editingPage) && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-5xl max-h-[92vh] flex flex-col shadow-2xl">
             {/* Modal Header */}
             <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between">
-              <h2 className="font-heading font-bold text-base text-white flex items-center gap-2">
-                <FileText className="w-4 h-4 text-primary" />
-                {isCreating ? 'Create New Public Website Page' : `Edit Page: ${editingPage?.title}`}
-              </h2>
+              <div className="flex items-center gap-3">
+                <FileText className="w-5 h-5 text-primary" />
+                <div>
+                  <h2 className="font-heading font-bold text-base text-white">
+                    {isCreating ? 'Create New Public Website Page' : `Edit Page: ${editingPage?.title}`}
+                  </h2>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    {autosaveStatus === 'saving' && (
+                      <span className="text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/20 px-2 py-0.5 rounded-full flex items-center gap-1 font-mono">
+                        <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Autosaving draft...
+                      </span>
+                    )}
+                    {autosaveStatus === 'saved' && (
+                      <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full flex items-center gap-1 font-mono">
+                        <Check className="w-2.5 h-2.5" /> Local draft saved
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
               <button
                 onClick={closeModal}
                 className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
@@ -421,8 +500,43 @@ export default function AdminPagesManager() {
               </button>
             </div>
 
+            {/* Local Draft Recovery Banner */}
+            {localDraftFound && (
+              <div className="px-6 py-2.5 bg-amber-500/10 border-b border-amber-500/20 text-xs text-amber-300 flex items-center justify-between">
+                <span>
+                  <strong>Unsaved local draft detected</strong> from {new Date(localDraftFound.savedAt || Date.now()).toLocaleTimeString()}.
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData((prev) => ({ ...prev, ...localDraftFound }));
+                      setLocalDraftFound(null);
+                    }}
+                    className="px-2.5 py-1 bg-amber-500 text-slate-950 font-bold rounded-lg text-[11px] shadow-sm hover:bg-amber-400"
+                  >
+                    Restore Local Draft
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (draftKey) {
+                        try {
+                          localStorage.removeItem(draftKey);
+                        } catch {}
+                      }
+                      setLocalDraftFound(null);
+                    }}
+                    className="text-slate-400 hover:text-white text-[11px] underline"
+                  >
+                    Discard
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Modal Body */}
-            <form onSubmit={handleSave} className="p-6 space-y-4 overflow-y-auto flex-1">
+            <form onSubmit={(e) => handleSave(e)} className="p-6 space-y-4 overflow-y-auto flex-1">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5">
@@ -475,115 +589,17 @@ export default function AdminPagesManager() {
                 />
               </div>
 
+              {/* Tiptap Visual CMS Rich-Text Editor */}
               <div>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-1.5">
-                  <label className="block text-xs font-semibold text-slate-300">
-                    Page Content (HTML / Rich Text)
-                  </label>
-                  <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-lg border border-slate-700">
-                    <button
-                      type="button"
-                      onClick={() => setEditorView('editor')}
-                      className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
-                        editorView === 'editor' ? 'bg-primary text-white' : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <Code2 className="w-3 h-3" />
-                      Editor
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditorView('split')}
-                      className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
-                        editorView === 'split' ? 'bg-primary text-white' : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <Columns className="w-3 h-3" />
-                      Split View
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditorView('preview')}
-                      className={`px-2 py-1 rounded text-[11px] font-medium flex items-center gap-1 transition-colors ${
-                        editorView === 'preview' ? 'bg-primary text-white' : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <Eye className="w-3 h-3" />
-                      Live Preview
-                    </button>
-                  </div>
-                </div>
-
-                {/* Quick HTML Insertion Toolbar */}
-                <div className="flex items-center gap-1.5 mb-2 overflow-x-auto py-1">
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, contentHtml: formData.contentHtml + '\n<h3>Section Heading</h3>\n' })}
-                    className="px-2 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] rounded border border-slate-700"
-                  >
-                    + H3 Heading
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, contentHtml: formData.contentHtml + '<b>Important text</b>' })}
-                    className="px-2 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] rounded border border-slate-700"
-                  >
-                    + Bold
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, contentHtml: formData.contentHtml + '\n<ul>\n  <li>Key point 1</li>\n  <li>Key point 2</li>\n</ul>\n' })}
-                    className="px-2 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] rounded border border-slate-700"
-                  >
-                    + Bullet List
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormData({ ...formData, contentHtml: formData.contentHtml + '\n<div class="p-3 bg-blue-900/30 border border-blue-800 rounded-lg text-blue-200 text-xs">Note message</div>\n' })}
-                    className="px-2 py-1 bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-[10px] rounded border border-slate-700"
-                  >
-                    + Callout Box
-                  </button>
-                </div>
-
-                {/* Editor Content Area */}
-                {editorView === 'editor' && (
-                  <textarea
-                    rows={12}
-                    required
-                    value={formData.contentHtml}
-                    onChange={(e) => setFormData({ ...formData, contentHtml: e.target.value })}
-                    className="w-full p-3.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs font-mono focus:ring-2 focus:ring-primary outline-none leading-relaxed"
-                  />
-                )}
-
-                {editorView === 'preview' && (
-                  <div
-                    className="w-full min-h-[300px] max-h-[420px] overflow-y-auto p-4 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs leading-relaxed space-y-2"
-                    dangerouslySetInnerHTML={{ __html: formData.contentHtml || '<em>No content entered yet</em>' }}
-                  />
-                )}
-
-                {editorView === 'split' && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <textarea
-                      rows={12}
-                      required
-                      value={formData.contentHtml}
-                      onChange={(e) => setFormData({ ...formData, contentHtml: e.target.value })}
-                      className="w-full p-3 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs font-mono focus:ring-2 focus:ring-primary outline-none leading-relaxed"
-                    />
-                    <div className="flex flex-col">
-                      <div className="text-[10px] uppercase font-bold tracking-wider text-slate-400 mb-1 px-1">
-                        Rendered Output
-                      </div>
-                      <div
-                        className="w-full flex-1 max-h-[280px] overflow-y-auto p-3.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs leading-relaxed space-y-2"
-                        dangerouslySetInnerHTML={{ __html: formData.contentHtml || '<em>Live preview will appear here</em>' }}
-                      />
-                    </div>
-                  </div>
-                )}
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Visual Rich-Text Content (Tiptap Visual Editor)
+                </label>
+                <TiptapEditor
+                  value={formData.contentHtml}
+                  onChange={(html) => setFormData((prev) => ({ ...prev, contentHtml: html }))}
+                  viewMode={editorView}
+                  onViewModeChange={setEditorView}
+                />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -601,22 +617,18 @@ export default function AdminPagesManager() {
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    Publishing Status
+                    Meta Description (SEO)
                   </label>
-                  <select
-                    value={formData.isPublished ? 'published' : 'draft'}
-                    onChange={(e) =>
-                      setFormData({ ...formData, isPublished: e.target.value === 'published' })
-                    }
+                  <input
+                    type="text"
+                    value={formData.metaDescription}
+                    onChange={(e) => setFormData({ ...formData, metaDescription: e.target.value })}
                     className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs focus:ring-2 focus:ring-primary outline-none"
-                  >
-                    <option value="published">Published (Visible Publicly)</option>
-                    <option value="draft">Draft (Hidden)</option>
-                  </select>
+                  />
                 </div>
               </div>
 
-              {/* Modal Footer */}
+              {/* Modal Footer with Draft & Publish Controls */}
               <div className="pt-4 border-t border-slate-800 flex items-center justify-between gap-3">
                 {editingPage && (
                   <button
@@ -625,7 +637,7 @@ export default function AdminPagesManager() {
                       fetchRevisions(editingPage.id);
                       setRevisionsModalOpen(true);
                     }}
-                    className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 transition-colors"
+                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 flex items-center gap-1.5 transition-colors"
                   >
                     <History className="w-3.5 h-3.5 text-primary" />
                     Revision History
@@ -636,21 +648,35 @@ export default function AdminPagesManager() {
                   <button
                     type="button"
                     onClick={closeModal}
-                    className="px-4 py-2.5 rounded-xl text-slate-400 hover:text-white text-xs transition-colors"
+                    className="px-4 py-2 rounded-xl text-slate-400 hover:text-white text-xs transition-colors"
                   >
                     Cancel
                   </button>
                   <button
-                    type="submit"
+                    type="button"
                     disabled={saving}
-                    className="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-600 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5"
+                    onClick={(e) => handleSave(e, false)}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 text-xs font-bold transition-all flex items-center gap-1.5"
                   >
-                    {saving ? (
+                    {saving && !formData.isPublished ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <FileText className="w-3.5 h-3.5 text-slate-400" />
+                    )}
+                    Save as Draft
+                  </button>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={(e) => handleSave(e, true)}
+                    className="px-5 py-2 rounded-xl bg-primary hover:bg-primary-600 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5"
+                  >
+                    {saving && formData.isPublished ? (
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                     ) : (
                       <Save className="w-3.5 h-3.5" />
                     )}
-                    Save Page
+                    Publish Page
                   </button>
                 </div>
               </div>

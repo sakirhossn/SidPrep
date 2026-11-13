@@ -4,6 +4,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import multipart from '@fastify/multipart';
+import cookie from '@fastify/cookie';
 import crypto from 'node:crypto';
 import { env } from './config/index.js';
 import { db } from './db/index.js';
@@ -18,6 +19,7 @@ import { quotaRoutes } from './modules/quotas/index.js';
 import { adminRoutes } from './modules/admin/index.js';
 import { teamRoutes } from './modules/admin/team.js';
 import { adminTestRoutes } from './modules/admin/tests.js';
+import { adminTaxonomyRoutes } from './modules/admin/taxonomy.js';
 import { supportRoutes } from './modules/support/index.js';
 import { releaseRoutes } from './modules/admin/releases.js';
 
@@ -26,11 +28,13 @@ export async function buildServer() {
   const app = fastify({
     logger: env.NODE_ENV !== 'test',
     trustProxy: 1, // INVARIANT F31: Trust reverse-proxy single-hop (Cloudflare / Nginx) to prevent IP spoofing
+    bodyLimit: 50 * 1024 * 1024, // 50 MB to support large question imports and content
     genReqId: () => `req_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
   });
 
   // Plugins
   await app.register(sensible);
+  await app.register(cookie);
   await app.register(multipart, {
     limits: {
       fileSize: 25 * 1024 * 1024, // 25 MB max
@@ -105,6 +109,7 @@ export async function buildServer() {
       await v1.register(adminRoutes);
       await v1.register(teamRoutes);
       await v1.register(adminTestRoutes);
+      await v1.register(adminTaxonomyRoutes);
       await v1.register(supportRoutes);
       await v1.register(releaseRoutes);
     },

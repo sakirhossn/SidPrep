@@ -1,11 +1,14 @@
 import type { FastifyPluginAsync } from 'fastify';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { db, QuestionRecord, PageRecord } from '../../db/index.js';
 import { query } from '../../db/pool.js';
-import { requireAdminAuth } from '../../lib/adminAuth.js';
-import { hashPassword, verifyPassword, signJwt, verifyJwt } from '../../lib/security.js';
+import { requireAdminAuth, requireRecentMfa } from '../../lib/adminAuth.js';
+import { hashPassword, verifyPassword, signJwt, verifyJwt, validateFileMagicBytes } from '../../lib/security.js';
 import { sanitizeHtml } from '../../lib/sanitizer.js';
 import { env } from '../../config/index.js';
+import { inspectQuestionImport, commitQuestionImport } from '../../services/questionImport.js';
 
 const memoryRevisions = new Map<string, any[]>();
 
@@ -134,6 +137,190 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   /**
+   * POST /admin/questions/imports/inspect
+   * Step 1-4 of Import Wizard: Upload -> Detect format -> Map fields -> Validate & Preview
+   * Protected: SUPER_ADMIN, CONTENT_MANAGER
+   */
+  fastify.post(
+    '/admin/questions/imports/inspect',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER'])] },
+    async (request, reply) => {
+      let fileContent = '';
+      let formatHint: 'CSV' | 'JSON' | undefined = undefined;
+      let examBasedMapping: 'EASY' | 'MEDIUM' | 'HARD' = 'MEDIUM';
+      let defaultMarks = 1.0;
+      let defaultNegativeMarks = 0.25;
+
+      if (request.isMultipart()) {
+        const part = await request.file();
+        if (!part) {
+          return reply.code(400).send({ success: false, error: { code: 'FILE_REQUIRED', message: 'Question export file is required.' } });
+        }
+        const buf = await part.toBuffer();
+        fileContent = buf.toString('utf8');
+        if (part.filename?.endsWith('.csv')) formatHint = 'CSV';
+        else if (part.filename?.endsWith('.json')) formatHint = 'JSON';
+      } else if (request.body && typeof request.body === 'object') {
+        const body = request.body as any;
+        fileContent = body.fileContent || '';
+        formatHint = body.format;
+        if (body.examBasedMapping) examBasedMapping = body.examBasedMapping;
+        if (typeof body.defaultMarks === 'number') defaultMarks = body.defaultMarks;
+        if (typeof body.defaultNegativeMarks === 'number') defaultNegativeMarks = body.defaultNegativeMarks;
+      }
+
+      if (!fileContent.trim()) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'EMPTY_FILE', message: 'Uploaded file or pasted JSON content is empty.' },
+        });
+      }
+
+      try {
+        const inspection = await inspectQuestionImport(
+          fileContent,
+          formatHint,
+          examBasedMapping,
+          defaultMarks,
+          defaultNegativeMarks
+        );
+
+        return reply.send({
+          success: true,
+          format: inspection.format,
+          totalRows: inspection.totalRows,
+          acceptedCount: inspection.acceptedCount,
+          duplicateCount: inspection.duplicateCount,
+          reviewNeededCount: inspection.reviewNeededCount,
+          rejectedCount: inspection.rejectedCount,
+          examBasedCount: inspection.examBasedCount,
+          detectedCategories: inspection.detectedCategories,
+          samplePreview: inspection.samplePreview,
+        });
+      } catch (err: any) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'PARSING_ERROR', message: err.message },
+        });
+      }
+    }
+  );
+
+  /**
+   * POST /admin/questions/imports/commit
+   * Step 5-7 of Import Wizard: Confirm & Commit Import Batch
+   * Invariant: Questions saved as DRAFT for editorial review
+   * Deduplication: Identifies duplicate external IDs and content fingerprints across formats
+   */
+  fastify.post(
+    '/admin/questions/imports/commit',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER'])] },
+    async (request, reply) => {
+      const admin = request.admin!;
+      const body = (request.body as any) || {};
+      const {
+        fileContent,
+        format,
+        filename,
+        examBasedMapping = 'MEDIUM',
+        defaultMarks = 1.0,
+        defaultNegativeMarks = 0.25,
+        categoryMappings = {},
+        updateExisting = false,
+      } = body;
+
+      if (!fileContent || !fileContent.trim()) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'EMPTY_CONTENT', message: 'File content is required to commit import.' },
+        });
+      }
+
+      try {
+        const inspection = await inspectQuestionImport(
+          fileContent,
+          format,
+          examBasedMapping,
+          defaultMarks,
+          defaultNegativeMarks
+        );
+
+        const result = await commitQuestionImport(inspection, {
+          filename,
+          format: inspection.format,
+          uploadedBy: admin.id,
+          defaultMarks,
+          defaultNegativeMarks,
+          examBasedMapping,
+          categoryMappings,
+          updateExisting: Boolean(updateExisting),
+        });
+
+        db.logAudit({
+          actorId: admin.id,
+          actorEmail: admin.email,
+          actorRole: admin.role,
+          module: 'QUESTION_BANK',
+          action: 'COMMIT_QUESTION_IMPORT_BATCH',
+          targetId: result.batchId,
+          changesDiff: {
+            format: inspection.format,
+            totalRows: result.totalRows,
+            acceptedCount: result.acceptedCount,
+            duplicateCount: result.duplicateCount,
+            reviewNeededCount: result.reviewNeededCount,
+            rejectedCount: result.rejectedCount,
+          },
+          ipAddress: request.ip,
+        });
+
+        return reply.send({
+          success: true,
+          ...result,
+          editorialStatus: 'DRAFT',
+          message: `Import batch '${result.batchId}' committed: ${result.acceptedCount} saved as DRAFT, ${result.duplicateCount} duplicates skipped, ${result.reviewNeededCount} flagged for review, ${result.rejectedCount} rejected.`,
+        });
+      } catch (err: any) {
+        return reply.code(500).send({
+          success: false,
+          error: { code: 'IMPORT_COMMIT_FAILED', message: err.message },
+        });
+      }
+    }
+  );
+
+  /**
+   * GET /admin/questions/imports/:id
+   * Retrieve import batch details and row audit report
+   */
+  fastify.get(
+    '/admin/questions/imports/:id',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER'])] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+
+      const batchRes = await query<any>('SELECT * FROM question_import_batches WHERE id = $1', [id]);
+      if (batchRes.rows.length === 0) {
+        return reply.code(404).send({
+          success: false,
+          error: { code: 'BATCH_NOT_FOUND', message: 'Import batch not found.' },
+        });
+      }
+
+      const rowsRes = await query<any>(
+        'SELECT * FROM question_import_rows WHERE batch_id = $1 ORDER BY row_index ASC LIMIT 500',
+        [id]
+      );
+
+      return reply.send({
+        success: true,
+        batch: batchRes.rows[0],
+        rows: rowsRes.rows,
+      });
+    }
+  );
+
+  /**
    * POST /admin/questions/import-staging
    * Bulk question import with staging and validation error report
    * Invariant: Never auto-publishes unreviewed imported items
@@ -163,6 +350,10 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           errors.push(`Row ${rowNum}: Missing correct option identifier`);
           hasRowError = true;
         }
+        if (!item.options || !Array.isArray(item.options) || item.options.length < 2) {
+          errors.push(`Row ${rowNum}: Missing or insufficient options (minimum 2 required)`);
+          hasRowError = true;
+        }
 
         if (hasRowError) continue;
 
@@ -181,13 +372,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
             {
               language: 'en',
               text: item.text,
-              explanation: item.explanation || 'Detailed academic explanation pending editorial review.',
-              options: item.options || [
-                { id: 'opt_1', text: 'Option A' },
-                { id: 'opt_2', text: 'Option B' },
-                { id: 'opt_3', text: 'Option C' },
-                { id: 'opt_4', text: 'Option D' },
-              ],
+              explanation: item.explanation || '',
+              options: item.options,
             },
           ],
         };
@@ -224,7 +410,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
    */
   fastify.post(
     '/admin/maintenance/purge-demo',
-    { preHandler: [requireAdminAuth(['SUPER_ADMIN'])] },
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN']), requireRecentMfa(600)] },
     async (request, reply) => {
       const admin = request.admin!;
       if (env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production') {
@@ -364,7 +550,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
    */
   fastify.post(
     '/admin/maintenance/cleanup-execute',
-    { preHandler: [requireAdminAuth(['SUPER_ADMIN'])] },
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN']), requireRecentMfa(600)] },
     async (request, reply) => {
       const admin = request.admin!;
       const body = (request.body || {}) as {
@@ -852,6 +1038,133 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   /**
+   * POST /admin/pages/images
+   * Upload image for CMS rich-text pages (magic byte verification, 5MB max)
+   * Protected: SUPER_ADMIN, CONTENT_MANAGER
+   */
+  fastify.post(
+    '/admin/pages/images',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER'])] },
+    async (request, reply) => {
+      let fileBuffer: Buffer | null = null;
+      let declaredType = 'JPEG';
+      let fileExt = 'jpg';
+
+      if (request.isMultipart()) {
+        const part = await request.file();
+        if (part) {
+          fileBuffer = await part.toBuffer();
+          if (part.mimetype === 'image/png') {
+            declaredType = 'PNG';
+            fileExt = 'png';
+          } else if (part.mimetype === 'image/webp') {
+            declaredType = 'WEBP';
+            fileExt = 'webp';
+          } else if (part.mimetype === 'image/jpeg' || part.mimetype === 'image/jpg') {
+            declaredType = 'JPEG';
+            fileExt = 'jpg';
+          } else {
+            declaredType = 'UNKNOWN';
+          }
+        }
+      } else if (request.body && typeof request.body === 'object') {
+        const body = request.body as any;
+        if (body.fileBase64) {
+          fileBuffer = Buffer.from(body.fileBase64, 'base64');
+          if (body.fileType) declaredType = String(body.fileType).toUpperCase();
+          if (declaredType === 'PNG' || body.filename?.endsWith('.png')) {
+            declaredType = 'PNG';
+            fileExt = 'png';
+          } else if (declaredType === 'WEBP' || body.filename?.endsWith('.webp')) {
+            declaredType = 'WEBP';
+            fileExt = 'webp';
+          } else {
+            declaredType = 'JPEG';
+            fileExt = 'jpg';
+          }
+        }
+      }
+
+      if (!fileBuffer || fileBuffer.length === 0) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'FILE_REQUIRED', message: 'Binary image payload (fileBase64 or multipart) is required.' },
+        });
+      }
+
+      if (fileBuffer.length > 5 * 1024 * 1024) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'FILE_TOO_LARGE', message: 'CMS image file must not exceed 5 MB.' },
+        });
+      }
+
+      const isValid = validateFileMagicBytes(fileBuffer, declaredType);
+      if (!isValid) {
+        return reply.code(400).send({
+          success: false,
+          error: { code: 'INVALID_IMAGE_FILE', message: 'Image must be a valid JPEG, PNG, or WebP file.' },
+        });
+      }
+
+      const cmsImagesDir = path.resolve(process.cwd(), 'uploads', 'cms_images');
+      if (!fs.existsSync(cmsImagesDir)) {
+        fs.mkdirSync(cmsImagesDir, { recursive: true });
+      }
+
+      const filename = `cms_img_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${fileExt}`;
+      const filePath = path.join(cmsImagesDir, filename);
+      await fs.promises.writeFile(filePath, fileBuffer);
+
+      const imageUrl = `/v1/cms/images/${filename}`;
+      return reply.send({
+        success: true,
+        url: imageUrl,
+        filename,
+      });
+    }
+  );
+
+  /**
+   * GET /cms/images/:filename
+   * Stream public CMS images safely with traversal protection
+   */
+  fastify.get('/cms/images/:filename', async (request, reply) => {
+    const { filename } = request.params as { filename: string };
+    if (!/^[a-zA-Z0-9_\-\.]+$/.test(filename) || filename.includes('..')) {
+      return reply.code(400).send({
+        success: false,
+        error: { code: 'INVALID_FILENAME', message: 'Invalid image filename' },
+      });
+    }
+
+    const cmsImagesDir = path.resolve(process.cwd(), 'uploads', 'cms_images');
+    const filePath = path.join(cmsImagesDir, filename);
+
+    if (!fs.existsSync(filePath)) {
+      return reply.code(404).send({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'CMS image not found' },
+      });
+    }
+
+    const ext = path.extname(filename).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+    };
+
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    const stream = fs.createReadStream(filePath);
+    return reply
+      .header('Content-Type', contentType)
+      .header('Cache-Control', 'public, max-age=31536000, immutable')
+      .send(stream);
+  });
+
+  /**
    * GET /admin/profile
    * Current staff profile
    * Protected: Any authenticated staff
@@ -875,7 +1188,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * PUT /admin/profile
-   * Update current staff profile
+   * Update current staff profile (Enforces recent MFA for email change)
    * Protected: Any authenticated staff
    */
   fastify.put(
@@ -891,6 +1204,14 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         admin.name = staffUser.name;
       }
       if (body.email && body.email.toLowerCase() !== admin.email.toLowerCase()) {
+        // Enforce recent MFA for email change
+        if (!admin.mfaVerifiedAt || (Date.now() - admin.mfaVerifiedAt) > 600 * 1000) {
+          return reply.code(428).send({
+            success: false,
+            error: { code: 'STEP_UP_MFA_REQUIRED', message: 'Modifying administrator email requires fresh multi-factor verification.' },
+          });
+        }
+
         const conflict = Array.from(db.adminUsers.values()).find(
           (u) => u.email.toLowerCase() === body.email.toLowerCase() && u.id !== admin.id
         );
@@ -933,12 +1254,12 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * PUT /admin/profile/password
-   * Change current admin password with current password verification
+   * Change current admin password with current password verification & recent MFA check
    * Protected: Any authenticated staff
    */
   fastify.put(
     '/admin/profile/password',
-    { preHandler: [requireAdminAuth()] },
+    { preHandler: [requireAdminAuth(), requireRecentMfa(600)] },
     async (request, reply) => {
       const admin = request.admin!;
       const staffUser = db.adminUsers.get(admin.id) || Array.from(db.adminUsers.values()).find((u) => u.email === admin.email);
@@ -979,7 +1300,20 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
       const newHash = await hashPassword(newPassword);
       staffUser.passwordHash = newHash;
+      staffUser.tokenVersion = (staffUser.tokenVersion || 1) + 1;
       await db.adminUsers.set(staffUser.id, staffUser);
+
+      // Revoke all trusted devices upon password change
+      try {
+        await query(
+          `UPDATE admin_trusted_devices 
+           SET revoked_at = NOW(), revoke_reason = 'PASSWORD_CHANGED' 
+           WHERE admin_id = $1 AND revoked_at IS NULL`,
+          [staffUser.id]
+        );
+      } catch (err: any) {
+        console.warn('[Admin] Failed to revoke trusted devices on password change:', err.message);
+      }
 
       db.logAudit({
         actorId: admin.id,
@@ -988,13 +1322,13 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
         module: 'ADMIN_PROFILE',
         action: 'CHANGE_PASSWORD',
         targetId: admin.id,
-        changesDiff: { note: 'Staff password changed successfully' },
+        changesDiff: { note: 'Staff password changed successfully; trusted devices revoked' },
         ipAddress: request.ip,
       });
 
       return reply.send({
         success: true,
-        message: 'Password changed successfully.',
+        message: 'Password changed successfully. All trusted devices and other sessions have been revoked.',
       });
     }
   );

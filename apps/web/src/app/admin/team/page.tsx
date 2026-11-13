@@ -64,8 +64,20 @@ export default function AdminTeamPage() {
 
   // Edit / Action confirmation
   const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null);
-  const [confirmAction, setConfirmAction] = useState<'REVOKE' | 'TOGGLE_STATUS' | 'DELETE' | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'REVOKE' | 'TOGGLE_STATUS' | 'PERMANENT_DELETE' | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+
+  // Permanent Delete Specific State
+  const [consequencesData, setConsequencesData] = useState<{
+    member: TeamMember;
+    trustedDevicesCount: number;
+    auditEventsCount: number;
+    isLastSuperAdmin: boolean;
+    consequences: string[];
+  } | null>(null);
+  const [consequencesLoading, setConsequencesLoading] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [confirmEmailInput, setConfirmEmailInput] = useState('');
 
   const getAdminToken = () => {
     if (typeof window === 'undefined') return '';
@@ -146,6 +158,82 @@ export default function AdminTeamPage() {
     }
   };
 
+  const handleOpenPermanentDelete = async (member: TeamMember) => {
+    setSelectedMember(member);
+    setConfirmAction('PERMANENT_DELETE');
+    setDeleteReason('');
+    setConfirmEmailInput('');
+    setConsequencesData(null);
+    setConsequencesLoading(true);
+    setError(null);
+
+    try {
+      const base = getApiBaseUrl();
+      const token = getAdminToken();
+      const res = await fetch(`${base}/v1/admin/team/${member.id}/consequences`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error?.message || 'Failed to inspect deletion consequences.');
+      setConsequencesData(data.data);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setConsequencesLoading(false);
+    }
+  };
+
+  const handleExecutePermanentDelete = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedMember) return;
+
+    if (!deleteReason.trim() || deleteReason.trim().length < 5) {
+      setError('A verified administrative reason (at least 5 characters) is required.');
+      return;
+    }
+
+    if (confirmEmailInput.trim().toLowerCase() !== selectedMember.email.toLowerCase()) {
+      setError(`Confirmation mismatch: Please type '${selectedMember.email}' exactly.`);
+      return;
+    }
+
+    setActionLoading(true);
+    setError(null);
+    try {
+      const base = getApiBaseUrl();
+      const token = getAdminToken();
+      const res = await fetch(`${base}/v1/admin/team/${selectedMember.id}/permanent`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          reason: deleteReason.trim(),
+          confirmEmail: confirmEmailInput.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 428) {
+          throw new Error('STEP_UP_MFA_REQUIRED: This destructive action requires fresh MFA verification (within 10 minutes). Please re-authenticate.');
+        }
+        throw new Error(data?.error?.message || 'Failed to permanently delete staff account.');
+      }
+
+      setSuccessMsg(`Staff account for '${selectedMember.name}' has been permanently deleted from PostgreSQL database.`);
+      setSelectedMember(null);
+      setConfirmAction(null);
+      setConsequencesData(null);
+      await fetchTeam();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleExecuteMemberAction = async () => {
     if (!selectedMember || !confirmAction) return;
 
@@ -173,16 +261,13 @@ export default function AdminTeamPage() {
           body: JSON.stringify({ isActive: !selectedMember.isActive }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data?.error?.message || 'Failed to update status.');
+        if (!res.ok) {
+          if (res.status === 428) {
+            throw new Error('Step-up MFA required: Account deactivation requires recent multi-factor verification.');
+          }
+          throw new Error(data?.error?.message || 'Failed to update status.');
+        }
         setSuccessMsg(`Staff member ${selectedMember.name} is now ${!selectedMember.isActive ? 'ACTIVE' : 'DEACTIVATED'}.`);
-      } else if (confirmAction === 'DELETE') {
-        const res = await fetch(`${base}/v1/admin/team/${selectedMember.id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data?.error?.message || 'Failed to remove staff member.');
-        setSuccessMsg(`Staff member ${selectedMember.name} has been removed.`);
       }
 
       setSelectedMember(null);
@@ -354,11 +439,8 @@ export default function AdminTeamPage() {
                         </button>
 
                         <button
-                          onClick={() => {
-                            setSelectedMember(user);
-                            setConfirmAction('DELETE');
-                          }}
-                          title="Remove staff member"
+                          onClick={() => handleOpenPermanentDelete(user)}
+                          title="Permanently Delete Staff Member"
                           className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -480,17 +562,16 @@ export default function AdminTeamPage() {
         </div>
       )}
 
-      {/* Action Confirmation Modal */}
-      {selectedMember && confirmAction && (
+      {/* Standard Action Confirmation Modal (Revoke / Toggle Status) */}
+      {selectedMember && (confirmAction === 'REVOKE' || confirmAction === 'TOGGLE_STATUS') && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl text-white">
             <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
               <div className="flex items-center gap-2">
-                <AlertTriangle className={`w-5 h-5 ${confirmAction === 'DELETE' ? 'text-rose-500' : 'text-amber-500'}`} />
+                <AlertTriangle className="w-5 h-5 text-amber-500" />
                 <h3 className="font-heading font-bold text-base">
                   {confirmAction === 'REVOKE' && 'Revoke Staff Sessions'}
                   {confirmAction === 'TOGGLE_STATUS' && `${selectedMember.isActive ? 'Deactivate' : 'Reactivate'} Staff Account`}
-                  {confirmAction === 'DELETE' && 'Remove Staff Member'}
                 </h3>
               </div>
               <button
@@ -508,7 +589,6 @@ export default function AdminTeamPage() {
               Target staff member: <strong className="text-white">{selectedMember.name}</strong> ({selectedMember.email}) [{selectedMember.role}].
               {confirmAction === 'REVOKE' && ' This will immediately invalidate all active JWT session tokens and force re-authentication.'}
               {confirmAction === 'TOGGLE_STATUS' && ` Are you sure you want to ${selectedMember.isActive ? 'deactivate' : 'reactivate'} this account?`}
-              {confirmAction === 'DELETE' && ' WARNING: This permanently removes this staff member account.'}
             </p>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
@@ -527,15 +607,145 @@ export default function AdminTeamPage() {
                 type="button"
                 onClick={handleExecuteMemberAction}
                 disabled={actionLoading}
-                className={`px-4 py-2 rounded-xl text-xs font-bold text-white disabled:opacity-50 ${
-                  confirmAction === 'DELETE'
-                    ? 'bg-rose-600 hover:bg-rose-500'
-                    : 'bg-indigo-600 hover:bg-indigo-500'
-                }`}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50"
               >
                 {actionLoading ? 'Processing...' : 'Confirm'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Staff Deletion Modal with Consequence Disclosure */}
+      {selectedMember && confirmAction === 'PERMANENT_DELETE' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-rose-500/30 rounded-2xl w-full max-w-lg p-6 shadow-2xl text-white">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-5 h-5 text-rose-500" />
+                <h3 className="font-heading font-extrabold text-base text-rose-400">
+                  Permanently Delete Staff Member
+                </h3>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedMember(null);
+                  setConfirmAction(null);
+                  setConsequencesData(null);
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {consequencesLoading ? (
+              <div className="p-8 flex flex-col items-center justify-center text-slate-400">
+                <Loader2 className="w-6 h-6 animate-spin text-rose-400 mb-2" />
+                <p className="text-xs">Inspecting database dependencies, sessions &amp; consequences...</p>
+              </div>
+            ) : consequencesData ? (
+              <form onSubmit={handleExecutePermanentDelete} className="space-y-4 text-xs">
+                {/* Last Super Admin Block */}
+                {consequencesData.isLastSuperAdmin && (
+                  <div className="p-3 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-200">
+                    <p className="font-bold flex items-center gap-1.5 mb-1">
+                      <AlertCircle className="w-4 h-4 text-rose-400" />
+                      CRITICAL PROTECTION: Deletion Prohibited
+                    </p>
+                    <p>
+                      This staff member is the last active Super Admin account. The system invariant prevents deletion of the sole administrator.
+                    </p>
+                  </div>
+                )}
+
+                {/* Target Information Card */}
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold text-slate-200 text-sm">{selectedMember.name}</span>
+                    <span className="font-mono text-[10px] text-rose-400 font-bold px-2 py-0.5 rounded bg-rose-500/10">
+                      {selectedMember.role}
+                    </span>
+                  </div>
+                  <div className="font-mono text-slate-400 text-[11px]">{selectedMember.email}</div>
+                  <div className="flex gap-4 pt-1 text-[11px] text-slate-400">
+                    <span>Active Trusted Devices: <strong className="text-white">{consequencesData.trustedDevicesCount}</strong></span>
+                    <span>Audit Events: <strong className="text-white">{consequencesData.auditEventsCount}</strong></span>
+                  </div>
+                </div>
+
+                {/* Consequences Checklist */}
+                <div>
+                  <h4 className="font-heading font-bold text-slate-300 mb-1.5 uppercase text-[10px] tracking-wider">
+                    Consequences of Permanent Deletion:
+                  </h4>
+                  <ul className="space-y-1 pl-4 list-disc text-slate-400">
+                    {consequencesData.consequences.map((c, idx) => (
+                      <li key={idx} className="leading-relaxed">{c}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                {!consequencesData.isLastSuperAdmin && (
+                  <>
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1">
+                        Administrative Reason (Mandatory, min 5 chars) <span className="text-rose-400">*</span>
+                      </label>
+                      <textarea
+                        required
+                        rows={2}
+                        value={deleteReason}
+                        onChange={(e) => setDeleteReason(e.target.value)}
+                        placeholder="State reason for permanent account erasure..."
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:border-rose-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1">
+                        Type <strong className="font-mono text-rose-400 select-all">{selectedMember.email}</strong> to confirm:
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={confirmEmailInput}
+                        onChange={(e) => setConfirmEmailInput(e.target.value)}
+                        placeholder={selectedMember.email}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 font-mono text-xs text-white placeholder-slate-700 focus:border-rose-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedMember(null);
+                          setConfirmAction(null);
+                          setConsequencesData(null);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300"
+                      >
+                        Cancel
+                      </button>
+
+                      <button
+                        type="submit"
+                        disabled={
+                          actionLoading ||
+                          confirmEmailInput.trim().toLowerCase() !== selectedMember.email.toLowerCase() ||
+                          deleteReason.trim().length < 5
+                        }
+                        className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-40 transition-all flex items-center gap-1.5"
+                      >
+                        {actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        Permanently Delete Account
+                      </button>
+                    </div>
+                  </>
+                )}
+              </form>
+            ) : null}
           </div>
         </div>
       )}

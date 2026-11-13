@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { HelpCircle, Plus, Upload, CheckCircle2, AlertCircle, FileText, Globe, Loader2 } from 'lucide-react';
 
 import { getApiBaseUrl } from '@/lib/api-client';
+import { QuestionImportWizard } from './QuestionImportWizard';
 
 const API_BASE = getApiBaseUrl();
 
@@ -28,9 +29,6 @@ export default function AdminQuestionsPage() {
   const [pyqYear, setPyqYear] = useState('2024');
   const [pyqExam, setPyqExam] = useState('SSC CGL');
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const [importJson, setImportJson] = useState('');
-  const [stagingReport, setStagingReport] = useState<any | null>(null);
 
   const fetchQuestions = async () => {
     setLoading(true);
@@ -94,45 +92,6 @@ export default function AdminQuestionsPage() {
       alert(`Network error: ${err.message}`);
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const handleBulkImportStaging = async () => {
-    try {
-      let items: any[] = [];
-      try {
-        items = JSON.parse(importJson);
-        if (!Array.isArray(items)) items = [items];
-      } catch {
-        alert('Invalid JSON format. Please provide a JSON array of question objects.');
-        return;
-      }
-
-      const token = sessionStorage.getItem('sidprep_admin_token') || localStorage.getItem('sidprep_admin_token');
-      const res = await fetch(`${API_BASE}/v1/admin/questions/import-staging`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ items }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setStagingReport(data.report || {
-          totalParsed: items.length,
-          validRows: items.length,
-          failedRows: 0,
-          errors: [],
-          status: 'STAGED_FOR_EDITORIAL_REVIEW',
-        });
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        alert(`Import validation failed: ${errData?.error?.message || 'Server error'}`);
-      }
-    } catch (err: any) {
-      alert(`Network error during staging: ${err.message}`);
     }
   };
 
@@ -326,63 +285,7 @@ export default function AdminQuestionsPage() {
       )}
 
       {activeTab === 'IMPORT' && (
-        <div className="p-7 rounded-2xl bg-slate-900 border border-slate-800 space-y-6">
-          <div className="flex items-center gap-2">
-            <Upload className="w-5 h-5 text-primary" />
-            <h3 className="font-heading font-bold text-sm text-white">Bulk Question Import with Staging</h3>
-          </div>
-          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
-            <strong>Mandatory Guardrail:</strong> Bulk imports are held in the staging queue with error reports. They are NEVER automatically published without explicit editorial signoff.
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Paste CSV or JSON payload</label>
-            <textarea
-              rows={6}
-              placeholder='[{"text": "Sample question", "correctOptionId": "opt_a", "options": [...]}]'
-              value={importJson}
-              onChange={(e) => setImportJson(e.target.value)}
-              className="w-full p-3 rounded-xl bg-slate-800 border border-slate-700 text-white text-xs font-mono outline-none"
-            />
-          </div>
-
-          <button
-            onClick={handleBulkImportStaging}
-            className="px-5 py-2.5 rounded-xl bg-primary hover:bg-primary-600 text-white text-xs font-bold"
-          >
-            Run Import Staging Check
-          </button>
-
-          {stagingReport && (
-            <div className="p-5 rounded-xl bg-slate-800/80 border border-slate-700 text-xs space-y-3">
-              <div className="font-heading font-bold text-white flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                Staging Validation Completed
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="p-2 rounded bg-slate-800 text-slate-300">
-                  <div className="font-bold text-base text-white">{stagingReport.totalParsed}</div>
-                  <div className="text-[10px]">Total Parsed</div>
-                </div>
-                <div className="p-2 rounded bg-slate-800 text-emerald-400">
-                  <div className="font-bold text-base">{stagingReport.validRows}</div>
-                  <div className="text-[10px]">Valid Rows</div>
-                </div>
-                <div className="p-2 rounded bg-slate-800 text-red-400">
-                  <div className="font-bold text-base">{stagingReport.failedRows}</div>
-                  <div className="text-[10px]">Failed Rows</div>
-                </div>
-              </div>
-              {stagingReport.errors.length > 0 && (
-                <div className="p-3 rounded bg-red-500/10 border border-red-500/20 text-red-300 text-[11px]">
-                  {stagingReport.errors.map((err: string, idx: number) => (
-                    <div key={idx}>{err}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <QuestionImportWizard onImportComplete={fetchQuestions} />
       )}
 
       {activeTab === 'LIST' && (

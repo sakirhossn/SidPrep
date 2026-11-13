@@ -985,6 +985,7 @@ export const userRoutes: FastifyPluginAsync = async (fastify) => {
       dailyGoalMinutes: s.dailyGoalMinutes,
       streakDays: s.streakDays,
       status: s.status,
+      avatarUrl: s.avatarUrl || null,
       isEmailVerified: s.isEmailVerified,
       isProfileComplete: Boolean(s.isProfileComplete),
       registrationIp: s.registrationIp || 'Not recorded',

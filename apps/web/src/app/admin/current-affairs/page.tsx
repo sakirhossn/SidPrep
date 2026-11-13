@@ -159,6 +159,9 @@ export default function AdminCurrentAffairsPage() {
 
   // Fetch Summary Modal State
   const [lastFetchResult, setLastFetchResult] = useState<any | null>(null);
+  const [sourceReports, setSourceReports] = useState<any[]>([]);
+  const [selectedRejectionReasons, setSelectedRejectionReasons] = useState<{ sourceName: string; reasons: string[] } | null>(null);
+  const [retryingFailed, setRetryingFailed] = useState(false);
 
   // Edit Draft Modal State
   const [editingDraft, setEditingDraft] = useState<NewsDraft | null>(null);
@@ -215,7 +218,21 @@ export default function AdminCurrentAffairsPage() {
       }
       if (jobsRes.ok) {
         const data = await jobsRes.json();
-        setJobs(data.data || []);
+        const jobList = data.data || [];
+        setJobs(jobList);
+        if (jobList.length > 0 && jobList[0].id) {
+          try {
+            const repRes = await fetch(`${base}/v1/admin/news/jobs/${jobList[0].id}/reports`, { headers });
+            if (repRes.ok) {
+              const repData = await repRes.json();
+              if (repData.reports && repData.reports.length > 0) {
+                setSourceReports(repData.reports);
+              }
+            }
+          } catch {
+            // Ignore optional reports load
+          }
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Failed to connect to admin current affairs backend.');
@@ -251,12 +268,53 @@ export default function AdminCurrentAffairsPage() {
       }
 
       setLastFetchResult(data);
+      if (data.sourceReports && data.sourceReports.length > 0) {
+        setSourceReports(data.sourceReports);
+      }
       setSuccessMsg(`Fetched ${data.itemsFetched} items: ${data.itemsNew} new drafts created (${data.itemsReviewNeeded || 0} need source review), ${data.itemsRejected} filtered.`);
       await loadData();
     } catch (err: any) {
       setError(err.message);
     } finally {
       setFetchingNow(false);
+    }
+  };
+
+  // Retry Failed Sources Handler
+  const handleRetryFailedSources = async () => {
+    const latestJobId = lastFetchResult?.jobId || jobs[0]?.id;
+    if (!latestJobId) return;
+
+    try {
+      setRetryingFailed(true);
+      setError(null);
+      const base = getApiBaseUrl();
+      const token = getAdminToken();
+
+      const res = await fetch(`${base}/v1/admin/news/jobs/${latestJobId}/retry-failed`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Retry failed');
+
+      setSuccessMsg(data.message || `Retried ${data.retriedCount} failed source(s).`);
+      if (data.reports && data.reports.length > 0) {
+        setSourceReports((prev) => {
+          const map = new Map(prev.map((r) => [r.source_name || r.sourceName, r]));
+          data.reports.forEach((nr: any) => map.set(nr.source_name || nr.sourceName, nr));
+          return Array.from(map.values());
+        });
+      }
+      await loadData();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setRetryingFailed(false);
     }
   };
 
@@ -678,6 +736,113 @@ export default function AdminCurrentAffairsPage() {
           </table>
         </div>
       </div>
+
+      {/* Per-Source Ingestion Funnel Report */}
+      {sourceReports.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="font-heading font-bold text-base text-white flex items-center gap-2">
+                <Radio className="w-4 h-4 text-indigo-400" />
+                Live Ingestion Funnel Telemetry ({sourceReports.length} Sources)
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Source &rarr; HTTP Status &rarr; Parsed &rarr; In Date Range &rarr; Duplicates &rarr; Rejected &rarr; Drafts Saved
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {sourceReports.some((r) => (r.status_category || r.statusCategory) !== 'OK') && (
+                <button
+                  onClick={handleRetryFailedSources}
+                  disabled={retryingFailed}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-xs border border-amber-500/30 transition-all disabled:opacity-50"
+                >
+                  {retryingFailed ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  <span>Retry Failed Sources</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-300">
+              <thead className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
+                <tr>
+                  <th className="p-3">Source</th>
+                  <th className="p-3">HTTP</th>
+                  <th className="p-3">Parsed</th>
+                  <th className="p-3">In Date Range</th>
+                  <th className="p-3">Duplicates</th>
+                  <th className="p-3">Rejected</th>
+                  <th className="p-3">Drafts Saved</th>
+                  <th className="p-3">Funnel Status</th>
+                  <th className="p-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 font-mono">
+                {sourceReports.map((r: any, idx: number) => {
+                  const sName = r.source_name || r.sourceName || 'Source';
+                  const http = r.http_status ?? r.httpStatus ?? 0;
+                  const parsed = r.parsed_count ?? r.parsedCount ?? 0;
+                  const inRange = r.in_date_range_count ?? r.inDateRangeCount ?? 0;
+                  const dupes = r.duplicate_count ?? r.duplicateCount ?? 0;
+                  const rejected = r.rejected_count ?? r.rejectedCount ?? 0;
+                  const draftsSaved = r.drafts_saved_count ?? r.draftsSavedCount ?? 0;
+                  const statusCat = r.status_category || r.statusCategory || 'OK';
+                  const rawReasons = r.rejection_reasons || r.rejectionReasons || [];
+                  const reasons: string[] = typeof rawReasons === 'string' ? JSON.parse(rawReasons) : Array.isArray(rawReasons) ? rawReasons : [];
+                  const errDetail = r.error_detail || r.errorDetail;
+
+                  return (
+                    <tr key={r.id || idx} className="hover:bg-slate-800/30 transition-colors">
+                      <td className="p-3 font-sans font-medium text-white max-w-xs truncate" title={sName}>
+                        {sName}
+                        {errDetail && <span className="block text-[10px] text-red-400 truncate font-mono">{errDetail}</span>}
+                      </td>
+                      <td className="p-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          http === 200 ? 'bg-emerald-500/20 text-emerald-400' :
+                          http === 304 ? 'bg-blue-500/20 text-blue-400' :
+                          'bg-red-500/20 text-red-400'
+                        }`}>
+                          {http || 'ERR'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-slate-300">{parsed}</td>
+                      <td className="p-3 text-slate-300">{inRange}</td>
+                      <td className="p-3 text-amber-400">{dupes}</td>
+                      <td className="p-3 text-red-400">{rejected}</td>
+                      <td className="p-3 text-emerald-400 font-bold">{draftsSaved}</td>
+                      <td className="p-3">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                          statusCat === 'OK' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                          statusCat === 'EMPTY' ? 'bg-slate-800 text-slate-400 border border-slate-700' :
+                          statusCat === 'BLOCKED_HTML' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                          statusCat === 'ALL_ITEMS_FILTERED' ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                          'bg-red-500/20 text-red-400 border border-red-500/30'
+                        }`}>
+                          {statusCat}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right">
+                        {reasons.length > 0 && (
+                          <button
+                            onClick={() => setSelectedRejectionReasons({ sourceName: sName, reasons })}
+                            className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-sans"
+                          >
+                            View Reasons ({reasons.length})
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Editorial Review & Publishing Queue */}
       <div className="space-y-4">
@@ -1342,6 +1507,45 @@ export default function AdminCurrentAffairsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Rejection Reasons Diagnostics Modal */}
+      {selectedRejectionReasons && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl p-6 shadow-2xl text-white space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="font-heading font-bold text-base flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-amber-400" />
+                Rejection Reasons: {selectedRejectionReasons.sourceName}
+              </h3>
+              <button
+                onClick={() => setSelectedRejectionReasons(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2 overflow-y-auto pr-2 text-xs">
+              <span className="text-slate-400 block mb-2">
+                The following {selectedRejectionReasons.reasons.length} items were excluded according to competitive exam editorial guidelines:
+              </span>
+              {selectedRejectionReasons.reasons.map((r, idx) => (
+                <div key={idx} className="p-2.5 rounded bg-slate-950 border border-slate-800/80 text-[11px] font-mono text-slate-300">
+                  {r}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-slate-800">
+              <button
+                onClick={() => setSelectedRejectionReasons(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

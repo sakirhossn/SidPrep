@@ -14,6 +14,7 @@ import { AuditEventRepository, OperationalEventRepository, AppTelemetryRepositor
 import { JobRepository } from './repositories/jobs.js';
 import { OtpChallengeRepository } from './repositories/otp.js';
 import { ExamProposalRepository } from './repositories/examProposals.js';
+import { TaxonomyRepository } from './repositories/taxonomy.js';
 import { query } from './pool.js';
 
 // Types representing core entities
@@ -134,6 +135,24 @@ export interface ExamProposalRecord {
   verifiedAt?: string;
 }
 
+export interface TaxonomyRecord {
+  id: string;
+  parentId?: string;
+  subject: string;
+  topicName: string;
+  subtopicName?: string;
+  level: 'SUBJECT' | 'TOPIC' | 'SUBTOPIC';
+  name: string;
+  slug?: string;
+  sortOrder: number;
+  isActive: boolean;
+  description?: string;
+  aliases: string[];
+  examMappings: string[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface QuestionRecord {
   id: string;
   topicId: string;
@@ -145,6 +164,14 @@ export interface QuestionRecord {
   createdBy: string;
   status: 'DRAFT' | 'REVIEWED' | 'PUBLISHED';
   isDemo?: boolean;
+  externalSourceId?: string;
+  contentFingerprint?: string;
+  marks?: number;
+  negativeMarks?: number;
+  marksSource?: 'FILE' | 'IMPORT_DEFAULT';
+  importBatchId?: string;
+  needsReview?: boolean;
+  reviewFlags?: string[];
   translations: {
     language: 'en' | 'hi' | 'bn';
     text: string;
@@ -345,6 +372,7 @@ export class SidPrepDatabase {
   public appTelemetry = new AppTelemetryRepository();
   public jobs = new JobRepository();
   public examProposals = new ExamProposalRepository();
+  public taxonomy = new TaxonomyRepository();
 
   public getPendingExamProposal(examId: string): ExamProposalRecord | undefined {
     return Array.from(this.examProposals.values())
@@ -587,6 +615,7 @@ export class SidPrepDatabase {
       this.pages.flush(),
       this.otpChallenges.flush(),
       this.examProposals.flush(),
+      this.taxonomy.flush(),
     ]);
   }
 
@@ -615,7 +644,12 @@ export class SidPrepDatabase {
         this.jobs.loadFromDb(),
         this.otpChallenges.loadFromDb(),
         this.examProposals.loadFromDb(),
+        this.taxonomy.loadFromDb(),
       ]);
+
+      if (this.taxonomy.size === 0) {
+        await this.seedDefaultTaxonomy();
+      }
 
       // Load app_settings for appVersion
       try {
@@ -652,7 +686,276 @@ export class SidPrepDatabase {
     }
   }
 
+  public async seedDefaultTaxonomy(localOnly: boolean = false): Promise<void> {
+    const defaultItems: TaxonomyRecord[] = [
+      {
+        id: 'Quantitative Aptitude',
+        subject: 'Quantitative Aptitude',
+        topicName: 'Quantitative Aptitude',
+        level: 'SUBJECT',
+        name: 'Quantitative Aptitude',
+        slug: 'quantitative-aptitude',
+        sortOrder: 1,
+        isActive: true,
+        description: 'Mathematical problem solving, numerical ability, arithmetic, and advanced math.',
+        aliases: ['Quants', 'Maths', 'Quantitative', 'Numerical Ability'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'General Intelligence and Reasoning',
+        subject: 'General Intelligence and Reasoning',
+        topicName: 'General Intelligence and Reasoning',
+        level: 'SUBJECT',
+        name: 'General Intelligence and Reasoning',
+        slug: 'general-intelligence-reasoning',
+        sortOrder: 2,
+        isActive: true,
+        description: 'Logical reasoning, analytical puzzles, verbal and non-verbal ability.',
+        aliases: ['Reasoning', 'General Intelligence', 'Mental Ability', 'Logic'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'General Awareness',
+        subject: 'General Awareness',
+        topicName: 'General Awareness',
+        level: 'SUBJECT',
+        name: 'General Awareness',
+        slug: 'general-awareness',
+        sortOrder: 3,
+        isActive: true,
+        description: 'Polity, economy, history, geography, general science, and current events.',
+        aliases: ['general_awareness', 'GK', 'General Studies', 'Current Affairs'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'English Comprehension',
+        subject: 'English Comprehension',
+        topicName: 'English Comprehension',
+        level: 'SUBJECT',
+        name: 'English Comprehension',
+        slug: 'english-comprehension',
+        sortOrder: 4,
+        isActive: true,
+        description: 'English grammar, vocabulary, reading comprehension, and verbal skills.',
+        aliases: ['English Language', 'General English', 'Verbal English'],
+        examMappings: ['SSC_CGL', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'Arithmetic',
+        parentId: 'Quantitative Aptitude',
+        subject: 'Quantitative Aptitude',
+        topicName: 'Arithmetic',
+        level: 'TOPIC',
+        name: 'Arithmetic',
+        slug: 'arithmetic',
+        sortOrder: 1,
+        isActive: true,
+        description: 'Percentages, profit & loss, ratio, time & work, simple & compound interest.',
+        aliases: ['Commercial Math', 'Basic Arithmetic'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'Advanced Mathematics',
+        parentId: 'Quantitative Aptitude',
+        subject: 'Quantitative Aptitude',
+        topicName: 'Advanced Mathematics',
+        level: 'TOPIC',
+        name: 'Advanced Mathematics',
+        slug: 'advanced-mathematics',
+        sortOrder: 2,
+        isActive: true,
+        description: 'Algebra, trigonometry, geometry, mensuration, coordinate geometry.',
+        aliases: ['Adv Math', 'Pure Math'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'Data Interpretation',
+        parentId: 'Quantitative Aptitude',
+        subject: 'Quantitative Aptitude',
+        topicName: 'Data Interpretation',
+        level: 'TOPIC',
+        name: 'Data Interpretation',
+        slug: 'data-interpretation',
+        sortOrder: 3,
+        isActive: true,
+        description: 'Tables, bar graphs, pie charts, line graphs, radar and mixed charts.',
+        aliases: ['DI', 'Charts & Graphs'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'Verbal Reasoning',
+        parentId: 'General Intelligence and Reasoning',
+        subject: 'General Intelligence and Reasoning',
+        topicName: 'Verbal Reasoning',
+        level: 'TOPIC',
+        name: 'Verbal Reasoning',
+        slug: 'verbal-reasoning',
+        sortOrder: 1,
+        isActive: true,
+        description: 'Analogies, syllogisms, coding-decoding, blood relations, inequalities.',
+        aliases: ['Logical Reasoning', 'Verbal Logic'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'Analytical & Puzzles',
+        parentId: 'General Intelligence and Reasoning',
+        subject: 'General Intelligence and Reasoning',
+        topicName: 'Analytical & Puzzles',
+        level: 'TOPIC',
+        name: 'Analytical & Puzzles',
+        slug: 'analytical-puzzles',
+        sortOrder: 2,
+        isActive: true,
+        description: 'Linear & circular seating, floor puzzles, scheduling, order & ranking.',
+        aliases: ['Puzzles', 'Seating Arrangement'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'Indian Polity & Constitution',
+        parentId: 'General Awareness',
+        subject: 'General Awareness',
+        topicName: 'Indian Polity & Constitution',
+        level: 'TOPIC',
+        name: 'Indian Polity & Constitution',
+        slug: 'indian-polity-constitution',
+        sortOrder: 1,
+        isActive: true,
+        description: 'Constitution of India, Fundamental Rights, Parliament, Judiciary, Constitutional Bodies.',
+        aliases: ['Polity', 'Constitution', 'Indian Polity'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'Indian Economy & Banking',
+        parentId: 'General Awareness',
+        subject: 'General Awareness',
+        topicName: 'Indian Economy & Banking',
+        level: 'TOPIC',
+        name: 'Indian Economy & Banking',
+        slug: 'indian-economy-banking',
+        sortOrder: 2,
+        isActive: true,
+        description: 'Monetary policy, RBI, fiscal budget, GDP, inflation, banking awareness.',
+        aliases: ['Economy', 'Economics', 'Banking Awareness'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'General Science',
+        parentId: 'General Awareness',
+        subject: 'General Awareness',
+        topicName: 'General Science',
+        level: 'TOPIC',
+        name: 'General Science',
+        slug: 'general-science',
+        sortOrder: 3,
+        isActive: true,
+        description: 'Physics, Chemistry, Biology, Environmental science.',
+        aliases: ['Science', 'Basic Science'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'Current Affairs',
+        parentId: 'General Awareness',
+        subject: 'General Awareness',
+        topicName: 'Current Affairs',
+        level: 'TOPIC',
+        name: 'Current Affairs',
+        slug: 'current-affairs',
+        sortOrder: 4,
+        isActive: true,
+        description: 'Daily national & international news, government schemes, awards, appointments.',
+        aliases: ['Current Events', 'CA', 'Daily Digest'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'sub_num_sys',
+        parentId: 'Arithmetic',
+        subject: 'Quantitative Aptitude',
+        topicName: 'Arithmetic',
+        subtopicName: 'Number System',
+        level: 'SUBTOPIC',
+        name: 'Number System',
+        slug: 'number-system',
+        sortOrder: 1,
+        isActive: true,
+        description: 'Divisibility, primes, LCM & HCF, unit digits, remainders.',
+        aliases: ['Integers', 'Divisibility'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'sub_percentages',
+        parentId: 'Arithmetic',
+        subject: 'Quantitative Aptitude',
+        topicName: 'Arithmetic',
+        subtopicName: 'Percentages',
+        level: 'SUBTOPIC',
+        name: 'Percentages',
+        slug: 'percentages',
+        sortOrder: 2,
+        isActive: true,
+        description: 'Percentage increase/decrease, successive percentage changes, fraction conversions.',
+        aliases: ['Percent', '%'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'sub_profit_loss',
+        parentId: 'Arithmetic',
+        subject: 'Quantitative Aptitude',
+        topicName: 'Arithmetic',
+        subtopicName: 'Profit & Loss',
+        level: 'SUBTOPIC',
+        name: 'Profit & Loss',
+        slug: 'profit-loss',
+        sortOrder: 3,
+        isActive: true,
+        description: 'Cost price, selling price, marked price, discounts, dishonest dealer.',
+        aliases: ['P&L', 'Discount'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'IBPS_PO', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'sub_fund_rights',
+        parentId: 'Indian Polity & Constitution',
+        subject: 'General Awareness',
+        topicName: 'Indian Polity & Constitution',
+        subtopicName: 'Fundamental Rights (Art 12-35)',
+        level: 'SUBTOPIC',
+        name: 'Fundamental Rights (Art 12-35)',
+        slug: 'fundamental-rights',
+        sortOrder: 1,
+        isActive: true,
+        description: 'Right to Equality, Freedom, Constitutional Remedies, Writs (Habeas Corpus, Mandamus).',
+        aliases: ['Article 32', 'Fundamental Rights', 'Writs'],
+        examMappings: ['SSC_CGL', 'RRB_NTPC', 'WBPSC_CLERKSHIP'],
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    for (const item of defaultItems) {
+      if (localOnly) {
+        this.taxonomy.setLocal(item.id, item);
+      } else {
+        await this.taxonomy.set(item.id, item);
+      }
+    }
+  }
+
   public seedLocalInitialData() {
+    this.seedDefaultTaxonomy(true);
         // 2. Seed Official Exams locally
     this.exams.setLocal('ssc-cgl', {
       id: 'ssc-cgl',

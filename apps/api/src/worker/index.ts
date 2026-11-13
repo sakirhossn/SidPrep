@@ -12,6 +12,7 @@ import { executeReleaseNotificationJob, processPushRetriesAndReceipts } from '..
 export class SidPrepWorker {
   private timer: NodeJS.Timeout | null = null;
   private isRunning = false;
+  private lastCronRunDateIst: string | null = null;
 
   public start() {
     this.isRunning = true;
@@ -74,13 +75,25 @@ export class SidPrepWorker {
     }).format(now);
 
     // 1. Scheduled News Fetch Check (e.g. 05:30 IST)
-    if (istTimeStr === '05:30') {
+    const todayIst = db.getTodayIst();
+    if (istTimeStr === '05:30' && this.lastCronRunDateIst !== todayIst) {
+      this.lastCronRunDateIst = todayIst;
       db.logOperational({
         service: 'WORKER_CRON',
         level: 'INFO',
         message: 'Executed scheduled 05:30 IST RSS news ingestion cycle',
         meta: { timestampIST: istTimeStr },
       });
+      try {
+        await executeNewsFetchJob({
+          sourceGroup: 'ALL',
+          workerId: 'worker_scheduled_0530_cron',
+          maxConcurrency: 4,
+          maxAgeHours: 48,
+        });
+      } catch (err: any) {
+        console.error('[Worker] Error executing scheduled 05:30 IST news fetch:', err.message);
+      }
     }
 
     // 2. Publish all approved and due scheduled news drafts (resilient catchup)

@@ -34,3 +34,5 @@ admin_credentials.json
 apps/api/admin_credentials.json
 .pgdata*
 apps/api/.pgdata*
+.gsd/
+

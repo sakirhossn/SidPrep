@@ -459,6 +459,93 @@ export const newsRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   /**
+   * GET /admin/news/jobs/:id/reports
+   * Per-source funnel reports for a specific ingestion job
+   */
+  fastify.get(
+    '/admin/news/jobs/:id/reports',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER', 'CA_EDITOR', 'AUDITOR'])] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      try {
+        const res = await query(
+          `SELECT * FROM news_fetch_source_reports WHERE job_id = $1 ORDER BY created_at ASC`,
+          [id]
+        );
+        return reply.send({ success: true, reports: res.rows });
+      } catch (err: any) {
+        return reply.send({ success: true, reports: [] });
+      }
+    }
+  );
+
+  /**
+   * POST /admin/news/jobs/:id/retry-failed
+   * Retries ingestion specifically for all sources that failed in a given job
+   */
+  fastify.post(
+    '/admin/news/jobs/:id/retry-failed',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER', 'CA_EDITOR'])] },
+    async (request, reply) => {
+      const admin = request.admin!;
+      const { id } = request.params as { id: string };
+
+      let failedReports: any[] = [];
+      try {
+        const res = await query(
+          `SELECT * FROM news_fetch_source_reports WHERE job_id = $1 AND status_category != 'OK'`,
+          [id]
+        );
+        failedReports = res.rows;
+      } catch (err: any) {
+        return reply.code(500).send({ error: `Database error querying source reports: ${err.message}` });
+      }
+
+      if (failedReports.length === 0) {
+        return reply.send({
+          success: true,
+          message: 'All sources in this job were either OK or no failed reports found to retry.',
+          retriedCount: 0,
+        });
+      }
+
+      const retriedSourceReports: any[] = [];
+      for (const report of failedReports) {
+        if (!report.source_id) continue;
+        const subResult = await executeNewsFetchJob({
+          sourceId: report.source_id,
+          adminId: admin.id,
+          workerId: `retry_${admin.id}`,
+          maxConcurrency: 1,
+          timeoutMs: 12000,
+          maxAgeHours: 72,
+        });
+        if (subResult.sourceReports?.[0]) {
+          retriedSourceReports.push(subResult.sourceReports[0]);
+        }
+      }
+
+      db.logAudit({
+        actorId: admin.id,
+        actorEmail: admin.email,
+        actorRole: admin.role,
+        module: 'NEWS_FETCHER',
+        action: 'RETRY_FAILED_SOURCES',
+        targetId: id,
+        changesDiff: { failedSourcesRetried: failedReports.length, reports: retriedSourceReports },
+        ipAddress: request.ip,
+      });
+
+      return reply.send({
+        success: true,
+        message: `Retried ${failedReports.length} failed source(s).`,
+        retriedCount: failedReports.length,
+        reports: retriedSourceReports,
+      });
+    }
+  );
+
+  /**
    * GET /admin/news/source-groups
    * List the 9 standard competitive exam source groups
    */

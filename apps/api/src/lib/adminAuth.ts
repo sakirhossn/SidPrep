@@ -8,12 +8,41 @@ export interface AuthenticatedAdmin {
   email: string;
   role: string;
   name: string;
+  mfaVerifiedAt?: number;
+  mfaTrusted?: boolean;
 }
 
 declare module 'fastify' {
   interface FastifyRequest {
     admin?: AuthenticatedAdmin;
   }
+}
+
+/**
+ * Fastify preHandler hook ensuring recent MFA verification for sensitive operations.
+ * Protects: password/email changes, staff role changes, permanent deletion, destructive maintenance.
+ */
+export function requireRecentMfa(maxAgeSeconds = 600) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    // Must already have passed requireAdminAuth
+    if (!request.admin) {
+      return reply.code(401).send({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'Administrative authentication required.' },
+      });
+    }
+
+    const mfaVerifiedAt = request.admin.mfaVerifiedAt;
+    if (!mfaVerifiedAt || (Date.now() - mfaVerifiedAt) > maxAgeSeconds * 1000) {
+      return reply.code(428).send({
+        success: false,
+        error: {
+          code: 'STEP_UP_MFA_REQUIRED',
+          message: 'This sensitive administrative operation requires fresh multi-factor verification within the last 10 minutes.',
+        },
+      });
+    }
+  };
 }
 
 /**
@@ -47,6 +76,8 @@ export function requireAdminAuth(allowedRoles?: string[]) {
       type?: string;
       step?: string;
       tokenVersion?: number;
+      mfaVerifiedAt?: number;
+      mfaTrusted?: boolean;
     }>(token);
 
     if (!decoded || !decoded.sub) {
@@ -127,6 +158,8 @@ export function requireAdminAuth(allowedRoles?: string[]) {
       email: staffUser.email,
       role: userRole,
       name: staffUser.name,
+      mfaVerifiedAt: decoded.mfaVerifiedAt,
+      mfaTrusted: decoded.mfaTrusted,
     };
   };
 }

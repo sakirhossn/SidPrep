@@ -5,6 +5,7 @@ import path from 'node:path';
 import { db, ResourceRecord } from '../../db/index.js';
 import { env } from '../../config/index.js';
 import { validateFileMagicBytes, verifyJwt } from '../../lib/security.js';
+import { validatePdfSecurity } from '../../lib/pdfSecurity.js';
 import { requireAdminAuth } from '../../lib/adminAuth.js';
 import { getSignedDownloadUrl } from '../../lib/storage.js';
 import { ResourceCreateSchema } from '@sidprep/contracts';
@@ -122,6 +123,34 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
     const safeFilename = `${resource.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.${resource.fileType.toLowerCase()}`;
     const disposition = isPreview ? `inline; filename="${safeFilename}"` : `attachment; filename="${safeFilename}"`;
 
+    const rangeHeader = request.headers.range;
+    if (rangeHeader && typeof rangeHeader === 'string' && rangeHeader.startsWith('bytes=')) {
+      const parts = rangeHeader.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+
+      if (isNaN(start) || start >= stat.size || end >= stat.size || start > end) {
+        reply.header('Content-Range', `bytes */${stat.size}`);
+        return reply.code(416).send({
+          success: false,
+          error: { code: 'RANGE_NOT_SATISFIABLE', message: 'Requested range not satisfiable.' },
+        });
+      }
+
+      const chunkSize = end - start + 1;
+      reply.code(206);
+      reply.header('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+      reply.header('Accept-Ranges', 'bytes');
+      reply.header('Content-Length', chunkSize);
+      reply.header('Content-Type', mimeType);
+      reply.header('Content-Disposition', disposition);
+      reply.header('ETag', `"${resource.sha256Hash}"`);
+
+      const stream = fs.createReadStream(filePath, { start, end });
+      return reply.send(stream);
+    }
+
+    reply.header('Accept-Ranges', 'bytes');
     reply.header('Content-Type', mimeType);
     reply.header('Content-Length', stat.size);
     reply.header('Content-Disposition', disposition);
@@ -289,6 +318,20 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
       });
     }
 
+    // PDF security check: reject active executable scripts and process launch actions
+    if (data.fileType === 'PDF') {
+      const pdfSec = validatePdfSecurity(fileBuffer);
+      if (!pdfSec.isValid) {
+        return reply.code(400).send({
+          success: false,
+          error: {
+            code: 'UNSAFE_PDF_CONTENT',
+            message: pdfSec.reason || 'PDF document contains active executable actions or scripts.',
+          },
+        });
+      }
+    }
+
     // Compute genuine SHA-256 hash
     const sha256Hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
     const ext = data.fileType.toLowerCase();
@@ -353,6 +396,86 @@ export const resourceRoutes: FastifyPluginAsync = async (fastify) => {
 
     return reply.send({ success: true, data: items });
   });
+
+  /**
+   * GET /admin/resources/:id/preview-stream
+   * Stream raw document/PDF bytes directly for administrative verification
+   * Protected: SUPER_ADMIN, CONTENT_MANAGER, AUDITOR
+   * Invariant: Bypasses student-facing previewAllowed and isPublished flags
+   * Invariant: Supports HTTP Range byte requests (206 Partial Content)
+   * Invariant: Returns 404 RESOURCE_FILE_MISSING if physical file is missing (zero synthetic substitutes)
+   */
+  fastify.get(
+    '/admin/resources/:id/preview-stream',
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN', 'CONTENT_MANAGER', 'AUDITOR'])] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const resource = db.resources.get(id);
+
+      if (!resource) {
+        return reply.code(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Resource not found' } });
+      }
+
+      let filePath = resource.storagePath;
+      if (!filePath || !fs.existsSync(filePath)) {
+        filePath = path.join(uploadsDir, `${resource.sha256Hash}.${resource.fileType.toLowerCase()}`);
+      }
+
+      if (!fs.existsSync(filePath)) {
+        return reply.code(404).send({
+          success: false,
+          error: { code: 'RESOURCE_FILE_MISSING', message: 'The requested document file could not be found in storage.' },
+        });
+      }
+
+      const stat = fs.statSync(filePath);
+      const mimeTypes: Record<string, string> = {
+        PDF: 'application/pdf',
+        PNG: 'image/png',
+        JPEG: 'image/jpeg',
+        DOCX: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      };
+      const mimeType = mimeTypes[resource.fileType] || 'application/octet-stream';
+      const safeFilename = `${resource.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.${resource.fileType.toLowerCase()}`;
+      const disposition = `inline; filename="${safeFilename}"`;
+
+      const rangeHeader = request.headers.range;
+      if (rangeHeader && typeof rangeHeader === 'string' && rangeHeader.startsWith('bytes=')) {
+        const parts = rangeHeader.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
+
+        if (isNaN(start) || start >= stat.size || end >= stat.size || start > end) {
+          reply.header('Content-Range', `bytes */${stat.size}`);
+          return reply.code(416).send({
+            success: false,
+            error: { code: 'RANGE_NOT_SATISFIABLE', message: 'Requested range not satisfiable.' },
+          });
+        }
+
+        const chunkSize = end - start + 1;
+        reply.code(206);
+        reply.header('Content-Range', `bytes ${start}-${end}/${stat.size}`);
+        reply.header('Accept-Ranges', 'bytes');
+        reply.header('Content-Length', chunkSize);
+        reply.header('Content-Type', mimeType);
+        reply.header('Content-Disposition', disposition);
+        reply.header('ETag', `"${resource.sha256Hash}"`);
+
+        const stream = fs.createReadStream(filePath, { start, end });
+        return reply.send(stream);
+      }
+
+      reply.header('Accept-Ranges', 'bytes');
+      reply.header('Content-Type', mimeType);
+      reply.header('Content-Length', stat.size);
+      reply.header('Content-Disposition', disposition);
+      reply.header('ETag', `"${resource.sha256Hash}"`);
+
+      const stream = fs.createReadStream(filePath);
+      return reply.send(stream);
+    }
+  );
 
   /**
    * PATCH /admin/resources/:id/permissions

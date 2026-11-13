@@ -33,6 +33,23 @@ export interface FeedItemParsed {
   publisherUsageRights?: 'OFFICIAL_GOVT' | 'PUBLIC_OPEN_ACCESS' | 'FAIR_DEALING_DISCOVERY' | 'REQUIRES_LICENSE';
 }
 
+export interface NewsSourceFunnelReport {
+  id: string;
+  jobId: string;
+  sourceId?: string;
+  sourceName: string;
+  httpStatus: number;
+  statusCategory: 'OK' | 'EMPTY' | 'PARSER_ERROR' | 'BLOCKED_HTML' | 'NETWORK_ERROR' | 'ALL_ITEMS_FILTERED';
+  parsedCount: number;
+  inDateRangeCount: number;
+  duplicateCount: number;
+  rejectedCount: number;
+  draftsSavedCount: number;
+  rejectionReasons: string[];
+  errorDetail?: string;
+  latencyMs: number;
+}
+
 export interface IngestionResult {
   jobId: string;
   sourceId?: string;
@@ -45,6 +62,7 @@ export interface IngestionResult {
   itemsReviewNeeded: number;
   itemsFailed: number;
   errors: string[];
+  sourceReports: NewsSourceFunnelReport[];
   durationMs?: number;
 }
 
@@ -451,8 +469,9 @@ const parser = new XMLParser({
  * e.g. (ISRO OR DRDO OR "military exercise") when:1d
  */
 export function buildGoogleNewsDiscoveryUrl(queryGroup: string): string {
-  const cleanGroup = queryGroup.trim().replace(/^[\(\s]+|[\)\s]+$/g, '');
-  const groupedQuery = `(${cleanGroup}) when:1d`;
+  let clean = queryGroup.trim().replace(/\s+when:\d+[dhwmy]/gi, '');
+  clean = clean.replace(/^[\(\s]+|[\)\s]+$/g, '');
+  const groupedQuery = `(${clean}) when:1d`;
   const encoded = encodeURIComponent(groupedQuery);
   return `https://news.google.com/rss/search?q=${encoded}&hl=en-IN&gl=IN&ceid=IN:en`;
 }
@@ -860,34 +879,6 @@ export function evaluateCompetitiveExamArticle(title: string, rawSummary: string
   }
 
   const staticGkBackground = `${matchedDomain.staticGkBase} Exam Relevance: Key foundation for General Studies papers across recruitment examinations.`;
-  const primaryFact = keyFacts[0] || title;
-  const question = `Regarding recent developments in "${title.length > 90 ? title.substring(0, 87) + '...' : title}", which of the following statements is correct?`;
-
-  const practiceMcqs = [
-    {
-      question,
-      options: [
-        {
-          id: 'opt_a',
-          text: `It represents an official initiative in ${matchedDomain.categoryLabel} aimed at strengthening national development and exam syllabus parameters.`,
-        },
-        {
-          id: 'opt_b',
-          text: 'It was issued as a routine non-binding advisory without any administrative or statutory framework.',
-        },
-        {
-          id: 'opt_c',
-          text: 'It solely concerns internal municipal civil disputes with no relevance to state or national policy.',
-        },
-        {
-          id: 'opt_d',
-          text: 'It has been rescinded by the competent authority with immediate effect.',
-        },
-      ],
-      correctOptionId: 'opt_a',
-      explanation: `Statement A is correct: This development directly pertains to ${matchedDomain.categoryLabel}. Reference fact: "${primaryFact}". Statements B, C, and D are incorrect characterizations.`,
-    },
-  ];
 
   return {
     isEligible: true,
@@ -898,7 +889,7 @@ export function evaluateCompetitiveExamArticle(title: string, rawSummary: string
     whyItMatters: matchedDomain.whyItMatters,
     staticGkBackground,
     keyFacts: keyFacts.slice(0, 5),
-    practiceMcqs,
+    practiceMcqs: [], // Real factual MCQs authored/verified during editorial review, never fabricated synthetically
     needsSourceReview,
   };
 }
@@ -987,27 +978,34 @@ export interface ParseFeedXmlOptions {
  * Parse XML feed (RSS 2.0, Atom 1.0, RDF) with detailed evaluation, freshness window,
  * Google News title parsing, and short description handling
  */
-export function parseFeedXmlDetailed(
+export interface RawFeedEntry {
+  rawTitle: string;
+  cleanedTitle: string;
+  headline: string;
+  originalPublisher: string;
+  summary: string;
+  link: string;
+  feedEntryId: string;
+  pubDateRaw?: string | null;
+}
+
+/**
+ * Extracts raw un-filtered entries from XML RSS/Atom/RDF feed
+ */
+export function extractRawFeedEntries(
   xmlContent: string,
-  sourceName: string,
-  options: ParseFeedXmlOptions = {}
+  sourceName: string
 ): {
-  eligibleItems: FeedItemParsed[];
-  rejectedCount: number;
-  rejectionReasons: string[];
   detectedFormat: 'RSS_2_0' | 'ATOM_1_0' | 'RSS_1_0' | 'INVALID_HTML' | 'UNKNOWN';
+  rawEntries: RawFeedEntry[];
+  formatError?: string;
 } {
   const detectedFormat = detectFeedFormat(xmlContent);
-  const eligibleItems: FeedItemParsed[] = [];
-  const rejectionReasons: string[] = [];
-  let rejectedCount = 0;
-
   if (detectedFormat === 'INVALID_HTML') {
     return {
-      eligibleItems: [],
-      rejectedCount: 1,
-      rejectionReasons: ['INVALID_FEED_FORMAT: Endpoint returned an HTML document instead of an XML RSS/Atom feed.'],
       detectedFormat,
+      rawEntries: [],
+      formatError: 'INVALID_FEED_FORMAT: Endpoint returned an HTML document instead of an XML RSS/Atom feed.',
     };
   }
 
@@ -1016,14 +1014,12 @@ export function parseFeedXmlDetailed(
     parsed = parser.parse(xmlContent);
   } catch (err: any) {
     return {
-      eligibleItems: [],
-      rejectedCount: 1,
-      rejectionReasons: [`MALFORMED_XML: ${err.message}`],
       detectedFormat,
+      rawEntries: [],
+      formatError: `MALFORMED_XML: ${err.message}`,
     };
   }
 
-  // Extract raw entries from RSS channel or Atom feed or RDF
   let rawItems: any[] = [];
   if (parsed?.rss?.channel?.item) {
     rawItems = parsed.rss.channel.item;
@@ -1034,23 +1030,19 @@ export function parseFeedXmlDetailed(
   }
   const itemsArray = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : [];
 
-  const now = Date.now();
-  const maxAgeMs = (options.maxAgeHours || 72) * 3600 * 1000;
-
+  const rawEntries: RawFeedEntry[] = [];
   for (const item of itemsArray) {
     if (!item) continue;
 
-    // 1. Title extraction
     const rawTitle = typeof item.title === 'string' ? item.title.trim() : (item.title?.['#text'] || '').trim();
-    if (!rawTitle || rawTitle.length < 10) continue;
+    if (!rawTitle || rawTitle.length < 5) continue;
 
     const cleanedTitle = cleanHtml(rawTitle);
 
-    // Parse Google News title pattern: "Headline - Publisher Name"
     let headline = cleanedTitle;
     let originalPublisher = sourceName;
     const gnewsMatch = cleanedTitle.match(/^(.*?)\s*-\s*([^-]+)$/);
-    if (gnewsMatch && gnewsMatch[1].length > 15 && gnewsMatch[2].length < 60) {
+    if (gnewsMatch && gnewsMatch[1].length > 10 && gnewsMatch[2].length < 60) {
       headline = gnewsMatch[1].trim();
       originalPublisher = gnewsMatch[2].trim();
     } else if (item.source && typeof item.source === 'string') {
@@ -1061,10 +1053,8 @@ export function parseFeedXmlDetailed(
       originalPublisher = typeof item['dc:creator'] === 'string' ? item['dc:creator'].trim() : originalPublisher;
     }
 
-    // Strip PR prefixes
     headline = headline.replace(/^(PIB|Press Release|Update|Ministry of [^:]+:)\s*/i, '').trim();
 
-    // 2. Summary extraction
     let summary = '';
     if (typeof item.description === 'string') {
       summary = item.description;
@@ -1087,7 +1077,6 @@ export function parseFeedXmlDetailed(
       summary = summary.substring(0, 797) + '...';
     }
 
-    // 3. Link & Feed Entry ID extraction
     let link = '';
     if (typeof item.link === 'string') {
       link = item.link.trim();
@@ -1108,46 +1097,86 @@ export function parseFeedXmlDetailed(
       (typeof item.id === 'string' ? item.id.trim() : item.id?.['#text']?.trim()) ||
       link;
 
-    // 4. Publication & Event Date Handling (Freshness Window)
     const pubDateRaw = item.pubDate || item.published || item.updated || item['dc:date'] || null;
-    let publicationDate: string;
-    let eventDate: string;
 
-    if (pubDateRaw) {
-      const parsedTime = Date.parse(pubDateRaw);
+    rawEntries.push({
+      rawTitle,
+      cleanedTitle,
+      headline,
+      originalPublisher,
+      summary,
+      link,
+      feedEntryId,
+      pubDateRaw,
+    });
+  }
+
+  return { detectedFormat, rawEntries };
+}
+
+/**
+ * Parse XML feed (RSS 2.0, Atom 1.0, RDF) with detailed evaluation, freshness window,
+ * Google News title parsing, and short description handling
+ */
+export function parseFeedXmlDetailed(
+  xmlContent: string,
+  sourceName: string,
+  options: ParseFeedXmlOptions = {}
+): {
+  eligibleItems: FeedItemParsed[];
+  rejectedCount: number;
+  rejectionReasons: string[];
+  detectedFormat: 'RSS_2_0' | 'ATOM_1_0' | 'RSS_1_0' | 'INVALID_HTML' | 'UNKNOWN';
+} {
+  const { detectedFormat, rawEntries, formatError } = extractRawFeedEntries(xmlContent, sourceName);
+  if (formatError) {
+    return {
+      eligibleItems: [],
+      rejectedCount: 1,
+      rejectionReasons: [formatError],
+      detectedFormat,
+    };
+  }
+
+  const eligibleItems: FeedItemParsed[] = [];
+  const rejectionReasons: string[] = [];
+  let rejectedCount = 0;
+
+  const now = Date.now();
+  const maxAgeMs = (options.maxAgeHours || 72) * 3600 * 1000;
+
+  for (const entry of rawEntries) {
+    let publicationDate = new Date().toISOString();
+    let eventDate = publicationDate.split('T')[0];
+
+    if (entry.pubDateRaw) {
+      const parsedTime = Date.parse(entry.pubDateRaw);
       if (!isNaN(parsedTime)) {
         if (options.maxAgeHours && now - parsedTime > maxAgeMs) {
           rejectedCount++;
-          rejectionReasons.push(`[${headline.substring(0, 35)}...]: STALE_PUBLICATION_DATE: Published ${new Date(parsedTime).toISOString()} exceeds ${options.maxAgeHours}h window.`);
+          rejectionReasons.push(`[${entry.headline.substring(0, 35)}...]: STALE_PUBLICATION_DATE: Published ${new Date(parsedTime).toISOString()} exceeds ${options.maxAgeHours}h window.`);
           continue;
         }
         publicationDate = new Date(parsedTime).toISOString();
         eventDate = publicationDate.split('T')[0];
-      } else {
-        publicationDate = new Date().toISOString();
-        eventDate = publicationDate.split('T')[0];
       }
-    } else {
-      publicationDate = new Date().toISOString();
-      eventDate = publicationDate.split('T')[0];
     }
 
-    // 5. Competitive Exam Evaluation
-    const evaluation = evaluateCompetitiveExamArticle(headline, summary, originalPublisher);
+    const evaluation = evaluateCompetitiveExamArticle(entry.headline, entry.summary, entry.originalPublisher);
     if (!evaluation.isEligible) {
       rejectedCount++;
-      rejectionReasons.push(`[${headline.substring(0, 35)}...]: ${evaluation.rejectionReason}`);
+      rejectionReasons.push(`[${entry.headline.substring(0, 35)}...]: ${evaluation.rejectionReason}`);
       continue;
     }
 
     eligibleItems.push({
-      title: cleanedTitle,
-      headline,
-      summary,
-      canonicalUrl: link,
-      originalUrl: link,
-      feedEntryId,
-      originalPublisher,
+      title: entry.cleanedTitle,
+      headline: entry.headline,
+      summary: entry.summary,
+      canonicalUrl: entry.link,
+      originalUrl: entry.link,
+      feedEntryId: entry.feedEntryId,
+      originalPublisher: entry.originalPublisher,
       eventDate,
       publicationDate,
       category: evaluation.category!,
@@ -1157,9 +1186,9 @@ export function parseFeedXmlDetailed(
       keyFacts: evaluation.keyFacts!,
       whyItMatters: evaluation.whyItMatters!,
       staticGkBackground: evaluation.staticGkBackground!,
-      practiceMcqs: evaluation.practiceMcqs!,
+      practiceMcqs: evaluation.practiceMcqs || [],
       needsSourceReview: Boolean(evaluation.needsSourceReview),
-      publisherUsageRights: originalPublisher.includes('Press Information Bureau') || originalPublisher.includes('Reserve Bank') ? 'OFFICIAL_GOVT' : 'FAIR_DEALING_DISCOVERY',
+      publisherUsageRights: entry.originalPublisher.includes('Press Information Bureau') || entry.originalPublisher.includes('Reserve Bank') ? 'OFFICIAL_GOVT' : 'FAIR_DEALING_DISCOVERY',
     });
   }
 
@@ -1335,11 +1364,52 @@ export async function executeNewsFetchJob(options: {
   const timeoutMs = options.timeoutMs || 10000;
   const maxAgeHours = options.maxAgeHours || 72;
 
+  // Ensure default candidate sources exist in PostgreSQL news_sources
+  try {
+    for (const src of DEFAULT_CANDIDATE_SOURCES) {
+      await query(
+        `INSERT INTO news_sources (
+          id, name, feed_url, category, source_group, source_type, query_template,
+          query_keywords, publisher_usage_rights, is_verified, is_enabled, priority_tier,
+          language, fetch_interval_minutes, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW()
+        ) ON CONFLICT (id) DO UPDATE SET feed_url = EXCLUDED.feed_url, is_enabled = EXCLUDED.is_enabled`,
+        [
+          src.id,
+          src.name,
+          src.feed_url,
+          src.category,
+          src.source_group,
+          src.source_type,
+          src.query_template || null,
+          src.query_keywords || [],
+          src.publisher_usage_rights,
+          src.is_verified || false,
+          src.is_enabled,
+          src.priority_tier || 2,
+          src.language || 'en',
+          src.fetch_interval_minutes || 180,
+        ]
+      );
+    }
+  } catch (err: any) {
+    // Graceful fallback
+  }
+
+  let validJobSourceId: string | null = null;
+  if (options.sourceId) {
+    try {
+      const chk = await query('SELECT id FROM news_sources WHERE id = $1', [options.sourceId]);
+      if (chk.rows.length > 0) validJobSourceId = options.sourceId;
+    } catch {}
+  }
+
   try {
     await query(
       `INSERT INTO news_fetch_jobs (id, source_id, source_group, status, lease_expires_at, worker_id, created_at, started_at)
        VALUES ($1, $2, $3, 'RUNNING', NOW() + INTERVAL '10 minutes', $4, NOW(), NOW())`,
-      [jobId, options.sourceId || null, options.sourceGroup || null, workerId]
+      [jobId, validJobSourceId, options.sourceGroup || null, workerId]
     );
   } catch (err: any) {
     console.warn('[NewsIngestion] PostgreSQL job insert fallback:', err.message);
@@ -1357,6 +1427,7 @@ export async function executeNewsFetchJob(options: {
     itemsReviewNeeded: 0,
     itemsFailed: 0,
     errors: [],
+    sourceReports: [],
   };
 
   // 1. Resolve Sources to Fetch
@@ -1409,8 +1480,12 @@ export async function executeNewsFetchJob(options: {
     }
   }
 
+  const now = Date.now();
+  const maxAgeMs = maxAgeHours * 3600 * 1000;
+
   // 2. Fetch Sources with Bounded Concurrency (6 workers)
   await mapConcurrent(sourcesToFetch, concurrency, async (source) => {
+    const sourceStartTime = Date.now();
     let feedUrl = source.feed_url || source.feedUrl;
     const sourceName = source.name || 'News Source';
     const sourceId = source.id;
@@ -1423,9 +1498,79 @@ export async function executeNewsFetchJob(options: {
       feedUrl = buildGoogleNewsDiscoveryUrl(queryTemplate);
     }
 
+    let httpStatus = 0;
+    let statusCategory: NewsSourceFunnelReport['statusCategory'] = 'OK';
+    let parsedCount = 0;
+    let inDateRangeCount = 0;
+    let duplicateCount = 0;
+    let rejectedCount = 0;
+    let draftsSavedCount = 0;
+    const rejectionReasons: string[] = [];
+    let errorDetail: string | undefined = undefined;
+
+    const recordReportAndPersist = async () => {
+      const report: NewsSourceFunnelReport = {
+        id: `nsr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        jobId,
+        sourceId,
+        sourceName,
+        httpStatus,
+        statusCategory,
+        parsedCount,
+        inDateRangeCount,
+        duplicateCount,
+        rejectedCount,
+        draftsSavedCount,
+        rejectionReasons: rejectionReasons.slice(0, 50),
+        errorDetail,
+        latencyMs: Date.now() - sourceStartTime,
+      };
+
+      let validReportSourceId: string | null = null;
+      if (sourceId) {
+        try {
+          const chk = await query('SELECT id FROM news_sources WHERE id = $1', [sourceId]);
+          if (chk.rows.length > 0) validReportSourceId = sourceId;
+        } catch {}
+      }
+
+      try {
+        await query(
+          `INSERT INTO news_fetch_source_reports (
+            id, job_id, source_id, source_name, http_status, status_category,
+            parsed_count, in_date_range_count, duplicate_count, rejected_count,
+            drafts_saved_count, rejection_reasons, error_detail, latency_ms, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())`,
+          [
+            report.id,
+            jobId,
+            validReportSourceId,
+            sourceName,
+            httpStatus,
+            statusCategory,
+            parsedCount,
+            inDateRangeCount,
+            duplicateCount,
+            rejectedCount,
+            draftsSavedCount,
+            JSON.stringify(report.rejectionReasons),
+            errorDetail || null,
+            report.latencyMs,
+          ]
+        );
+      } catch (err: any) {
+        console.warn('[NewsIngestion] PostgreSQL source report insert fallback:', err.message);
+      }
+
+      result.sourceReports.push(report);
+    };
+
     if (!isSafePublicUrl(feedUrl)) {
+      statusCategory = 'NETWORK_ERROR';
+      errorDetail = `Blocked unsafe or internal feed URL: ${feedUrl}`;
       result.itemsRejected++;
-      result.errors.push(`[${sourceName}]: Blocked unsafe or internal feed URL: ${feedUrl}`);
+      result.errors.push(`[${sourceName}]: ${errorDetail}`);
+      await recordReportAndPersist();
       return;
     }
 
@@ -1434,8 +1579,8 @@ export async function executeNewsFetchJob(options: {
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
       const headers: Record<string, string> = {
-        'User-Agent': 'SidPrep-CurrentAffairs-Bot/2.0 (+https://sidprep.in; news-ingest@sidprep.in)',
-        'Accept': 'application/rss+xml, application/xml, text/xml, application/atom+xml, text/plain',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 (compatible; SidPrep-Bot/2.0; +https://sidprep.in)',
+        'Accept': 'application/rss+xml, application/xml, text/xml, application/atom+xml, text/plain, */*',
       };
       if (source.etag) headers['If-None-Match'] = source.etag;
       if (source.last_modified_header) headers['If-Modified-Since'] = source.last_modified_header;
@@ -1451,12 +1596,19 @@ export async function executeNewsFetchJob(options: {
         clearTimeout(timeout);
       }
 
+      httpStatus = response.status;
+
       if (response.status === 304) {
+        statusCategory = 'OK';
+        errorDetail = 'HTTP 304 Not Modified (content unchanged).';
+        await recordReportAndPersist();
         return;
       }
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status} from source feed.`);
+        statusCategory = (response.status === 403 || response.status === 401) ? 'BLOCKED_HTML' : 'NETWORK_ERROR';
+        errorDetail = `HTTP ${response.status} from source feed.`;
+        throw new Error(errorDetail);
       }
 
       const responseETag = response.headers.get('etag');
@@ -1464,60 +1616,85 @@ export async function executeNewsFetchJob(options: {
 
       const text = await response.text();
       if (text.length > 2 * 1024 * 1024) {
-        throw new Error(`Feed exceeded 2MB size limit: ${text.length} bytes.`);
+        statusCategory = 'PARSER_ERROR';
+        errorDetail = `Feed exceeded 2MB size limit: ${text.length} bytes.`;
+        throw new Error(errorDetail);
       }
 
-      const { eligibleItems, rejectedCount, rejectionReasons, detectedFormat } = parseFeedXmlDetailed(
-        text,
-        sourceName,
-        { maxAgeHours }
-      );
+      const { detectedFormat, rawEntries, formatError } = extractRawFeedEntries(text, sourceName);
 
-      result.itemsFetched += eligibleItems.length + rejectedCount;
-      result.itemsRejected += rejectedCount;
-
-      for (const reason of rejectionReasons) {
-        result.errors.push(reason);
+      if (formatError) {
+        statusCategory = formatError.includes('HTML') ? 'BLOCKED_HTML' : 'PARSER_ERROR';
+        errorDetail = formatError;
+        result.itemsFailed++;
+        result.errors.push(`[${sourceName}]: ${formatError}`);
+        await recordReportAndPersist();
+        return;
       }
 
-      // Process each eligible item
-      for (const item of eligibleItems) {
-        // Retrieve full article content if short description
-        if (item.summary.split(/\s+/).length < 40) {
-          const retrieval = await retrieveArticleContentIfShort(item.canonicalUrl, item.summary);
-          if (retrieval.wasRetrieved) {
-            item.articleContent = retrieval.content;
-            // Re-evaluate with enriched article content
-            const reEval = evaluateCompetitiveExamArticle(item.headline, retrieval.content, item.originalPublisher);
-            if (reEval.isEligible && reEval.keyFacts && reEval.keyFacts.length >= 3) {
-              item.keyFacts = reEval.keyFacts;
-              item.needsSourceReview = false;
+      parsedCount = rawEntries.length;
+      if (parsedCount === 0) {
+        statusCategory = 'EMPTY';
+        errorDetail = 'Valid feed containing 0 items.';
+        await recordReportAndPersist();
+        return;
+      }
+
+      // Process each raw entry
+      for (const entry of rawEntries) {
+        // 1. Freshness filter
+        let publicationDate = new Date().toISOString();
+        let eventDate = publicationDate.split('T')[0];
+
+        if (entry.pubDateRaw) {
+          const parsedTime = Date.parse(entry.pubDateRaw);
+          if (!isNaN(parsedTime)) {
+            if (maxAgeHours && (now - parsedTime > maxAgeMs)) {
+              rejectedCount++;
+              rejectionReasons.push(`[${entry.headline.substring(0, 35)}...]: STALE_PUBLICATION_DATE: Published ${new Date(parsedTime).toISOString()} exceeds ${maxAgeHours}h window.`);
+              continue;
             }
+            publicationDate = new Date(parsedTime).toISOString();
+            eventDate = publicationDate.split('T')[0];
+          }
+        }
+        inDateRangeCount++;
+
+        // 2. Fetch full article content BEFORE short description rejection
+        let contentToEvaluate = entry.summary;
+        let articleContent: string | undefined = undefined;
+        if ((entry.summary || '').split(/\s+/).length < 40 && isSafePublicUrl(entry.link)) {
+          const retrieval = await retrieveArticleContentIfShort(entry.link, entry.summary);
+          if (retrieval.wasRetrieved) {
+            articleContent = retrieval.content;
+            contentToEvaluate = retrieval.content;
           }
         }
 
-        if (item.needsSourceReview) {
-          result.itemsReviewNeeded++;
-        }
-
-        // Deduplication Step 1: Exact canonical URL check
-        const exactMatch = existingArticles.find((a) => a.canonicalUrl === item.canonicalUrl || a.sourceUrl === item.canonicalUrl);
-        if (exactMatch) {
-          result.itemsDuplicate++;
+        // 3. Competitive exam evaluation
+        const evaluation = evaluateCompetitiveExamArticle(entry.headline, contentToEvaluate, entry.originalPublisher);
+        if (!evaluation.isEligible) {
+          rejectedCount++;
+          rejectionReasons.push(`[${entry.headline.substring(0, 35)}...]: ${evaluation.rejectionReason}`);
           continue;
         }
 
-        // Deduplication Step 2: Headline similarity clustering (0.65 Jaccard threshold with guards)
-        const similarMatch = existingArticles.find((a) => areTitlesSimilar(item.headline, a.headline, 0.65));
+        // 4. Deduplication
+        const exactMatch = existingArticles.find((a) => a.canonicalUrl === entry.link || a.sourceUrl === entry.link);
+        if (exactMatch) {
+          duplicateCount++;
+          continue;
+        }
+
+        const similarMatch = existingArticles.find((a) => areTitlesSimilar(entry.headline, a.headline, 0.65));
         if (similarMatch) {
-          result.itemsDuplicate++;
-          // Preserve alternative source citation
+          duplicateCount++;
           try {
             await query(
               `UPDATE news_articles
                SET alternative_source_urls = array_append(alternative_source_urls, $1)
                WHERE id = $2 AND NOT ($1 = ANY(alternative_source_urls))`,
-              [item.canonicalUrl, similarMatch.id]
+              [entry.link, similarMatch.id]
             );
           } catch {
             // Ignore if array_append fallback
@@ -1525,9 +1702,10 @@ export async function executeNewsFetchJob(options: {
           continue;
         }
 
+        // 5. Unique article -> save draft
         const articleId = `art_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        draftsSavedCount++;
 
-        // Persist to PostgreSQL news_articles
         try {
           await query(
             `INSERT INTO news_articles (
@@ -1541,73 +1719,95 @@ export async function executeNewsFetchJob(options: {
               articleId,
               sourceId,
               sourceName,
-              item.canonicalUrl,
-              item.canonicalUrl,
-              item.feedEntryId,
-              item.originalPublisher,
-              item.headline,
-              item.summary,
-              item.eventDate,
-              item.publicationDate,
-              item.category,
-              item.relevantExams,
-              item.syllabusTopics,
-              item.keyFacts,
-              item.whyItMatters,
-              item.staticGkBackground,
-              JSON.stringify(item.practiceMcqs),
+              entry.link,
+              entry.link,
+              entry.feedEntryId,
+              entry.originalPublisher,
+              entry.headline,
+              entry.summary,
+              eventDate,
+              publicationDate,
+              evaluation.category,
+              evaluation.relevantExams,
+              evaluation.syllabusTopics,
+              evaluation.keyFacts,
+              evaluation.whyItMatters,
+              evaluation.staticGkBackground,
+              JSON.stringify(evaluation.practiceMcqs || []),
               source.language || 'en',
-              item.needsSourceReview ? 'NEEDS_SOURCE_REVIEW' : 'DRAFT',
-              item.needsSourceReview,
-              item.articleContent || null,
-              item.publisherUsageRights || 'FAIR_DEALING_DISCOVERY',
+              evaluation.needsSourceReview ? 'NEEDS_SOURCE_REVIEW' : 'DRAFT',
+              Boolean(evaluation.needsSourceReview),
+              articleContent || null,
+              entry.originalPublisher.includes('Press Information Bureau') || entry.originalPublisher.includes('Reserve Bank') ? 'OFFICIAL_GOVT' : 'FAIR_DEALING_DISCOVERY',
             ]
           );
         } catch (err: any) {
           console.warn('[NewsIngestion] PostgreSQL article insert fallback:', err.message);
         }
 
-        // Persist to NewsDrafts repository
         const newDraft: NewsDraftRecord = {
           id: articleId,
-          title: item.headline,
-          headline: item.headline,
-          originalSummary: item.summary,
-          summary: item.summary,
-          category: item.category,
-          targetExams: item.relevantExams,
-          keyFacts: item.keyFacts,
-          whyItMatters: item.whyItMatters,
-          staticGkBackground: item.staticGkBackground,
-          practiceMcqs: item.practiceMcqs,
+          title: entry.headline,
+          headline: entry.headline,
+          originalSummary: entry.summary,
+          summary: entry.summary,
+          category: evaluation.category!,
+          targetExams: evaluation.relevantExams || [],
+          keyFacts: evaluation.keyFacts || [],
+          whyItMatters: evaluation.whyItMatters,
+          staticGkBackground: evaluation.staticGkBackground,
+          practiceMcqs: evaluation.practiceMcqs || [],
           sourceName: sourceName,
-          sourceUrl: item.canonicalUrl,
-          canonicalUrl: item.canonicalUrl,
-          feedEntryId: item.feedEntryId,
-          originalPublisher: item.originalPublisher,
+          sourceUrl: entry.link,
+          canonicalUrl: entry.link,
+          feedEntryId: entry.feedEntryId,
+          originalPublisher: entry.originalPublisher,
           alternativeSourceUrls: [],
-          needsSourceReview: item.needsSourceReview,
-          articleContent: item.articleContent,
-          publisherUsageRights: item.publisherUsageRights,
-          eventDate: item.eventDate,
-          confidenceScore: item.needsSourceReview ? 0.75 : 0.98,
-          editorialStatus: item.needsSourceReview ? 'NEEDS_SOURCE_REVIEW' : 'DRAFT',
+          needsSourceReview: Boolean(evaluation.needsSourceReview),
+          articleContent,
+          publisherUsageRights: entry.originalPublisher.includes('Press Information Bureau') || entry.originalPublisher.includes('Reserve Bank') ? 'OFFICIAL_GOVT' : 'FAIR_DEALING_DISCOVERY',
+          eventDate,
+          confidenceScore: evaluation.needsSourceReview ? 0.75 : 0.98,
+          editorialStatus: evaluation.needsSourceReview ? 'NEEDS_SOURCE_REVIEW' : 'DRAFT',
           publishedAt: undefined,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
         await db.newsDrafts.set(articleId, newDraft);
 
-        // Add to active set for downstream deduplication
+        if (evaluation.needsSourceReview) {
+          result.itemsReviewNeeded++;
+        }
+
         existingArticles.push({
           id: articleId,
-          headline: item.headline,
-          canonicalUrl: item.canonicalUrl,
-          sourceUrl: item.canonicalUrl,
+          headline: entry.headline,
+          canonicalUrl: entry.link,
+          sourceUrl: entry.link,
           priorityTier,
         });
+      }
 
-        result.itemsNew++;
+      // Determine final status category
+      if (draftsSavedCount > 0 || duplicateCount > 0) {
+        statusCategory = 'OK';
+      } else if (inDateRangeCount > 0) {
+        statusCategory = 'ALL_ITEMS_FILTERED';
+        errorDetail = 'All items in date range were filtered out by exam relevance criteria.';
+      } else {
+        statusCategory = 'ALL_ITEMS_FILTERED';
+        errorDetail = 'All items filtered (all items exceeded freshness window).';
+      }
+
+      await recordReportAndPersist();
+
+      result.itemsFetched += parsedCount;
+      result.itemsNew += draftsSavedCount;
+      result.itemsDuplicate += duplicateCount;
+      result.itemsRejected += rejectedCount;
+
+      for (const reason of rejectionReasons) {
+        result.errors.push(reason);
       }
 
       // Update source health and format
@@ -1626,6 +1826,12 @@ export async function executeNewsFetchJob(options: {
     } catch (err: any) {
       result.itemsFailed++;
       result.errors.push(`Error fetching ${sourceName}: ${err.message}`);
+
+      if (!statusCategory || statusCategory === 'OK') {
+        statusCategory = (err.message.includes('403') || err.message.includes('HTML')) ? 'BLOCKED_HTML' : 'NETWORK_ERROR';
+      }
+      errorDetail = err.message;
+      await recordReportAndPersist();
 
       try {
         await query(
