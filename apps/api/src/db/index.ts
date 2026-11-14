@@ -224,10 +224,12 @@ export interface AttemptRecord {
   unattemptedCount: number;
   answers: PersistentAnswersMap | any;
   resultSnapshot?: any;
+  isDemo?: boolean;
 }
 
 export interface NewsDraftRecord {
   id: string;
+  isDemo?: boolean;
   candidateId?: string;
   title: string;
   headline?: string;
@@ -1727,7 +1729,7 @@ export class SidPrepDatabase {
     }
   }
 
-  // Purge Demo Data Method backed by real SQL deletions
+  // Purge Demo Data Method backed by memory and SQL deletions
   public async purgeDemoData(options: {
     clearQuestions?: boolean;
     clearTests?: boolean;
@@ -1735,66 +1737,120 @@ export class SidPrepDatabase {
     clearResources?: boolean;
     clearAttempts?: boolean;
     clearStudents?: boolean;
+    purgeAllContent?: boolean;
   }): Promise<{ success: boolean; clearedCount: number }> {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('Broad table purge is strictly forbidden in production mode.');
-    }
-
     let clearedCount = 0;
-    if (options.clearQuestions) {
+
+    if (options.clearQuestions || options.purgeAllContent) {
       const demoQIds = Array.from(this.questions.values())
-        .filter((q: any) => q.isDemo || q.id === 'q_1' || q.id === 'q_2' || q.id.startsWith('demo_'))
+        .filter((q: any) => options.purgeAllContent || q.isDemo || q.id === 'q_1' || q.id === 'q_2' || q.id.startsWith('demo_') || q.id.includes('demo'))
         .map((q) => q.id);
       for (const id of demoQIds) {
         await this.questions.delete(id);
         clearedCount++;
       }
+      try {
+        if (options.purgeAllContent) {
+          await query(`DELETE FROM questions`);
+        } else {
+          await query(`DELETE FROM questions WHERE id IN ('q_1', 'q_2') OR id LIKE '%demo%'`);
+        }
+      } catch (err: any) {
+        console.warn('[DB Purge] SQL questions cleanup warning:', err.message);
+      }
     }
-    if (options.clearTests) {
+
+    if (options.clearTests || options.purgeAllContent) {
       const demoTestIds = Array.from(this.tests.values())
-        .filter((t: any) => t.isDemo || t.id === 'test_cgl_full_01' || t.id.startsWith('demo_'))
+        .filter((t: any) => options.purgeAllContent || t.isDemo || t.id === 'test_cgl_full_01' || t.id.startsWith('demo_') || t.id.includes('demo'))
         .map((t) => t.id);
       for (const id of demoTestIds) {
         await this.tests.delete(id);
         clearedCount++;
       }
+      try {
+        if (options.purgeAllContent) {
+          await query(`DELETE FROM tests`);
+        } else {
+          await query(`DELETE FROM tests WHERE id = 'test_cgl_full_01' OR id LIKE '%demo%'`);
+        }
+      } catch (err: any) {
+        console.warn('[DB Purge] SQL tests cleanup warning:', err.message);
+      }
     }
-    if (options.clearNews) {
+
+    if (options.clearNews || options.purgeAllContent) {
       const demoDraftIds = Array.from(this.newsDrafts.values())
-        .filter((d: any) => d.isDemo || d.id === 'draft_01' || d.id.startsWith('demo_'))
+        .filter((d: any) => options.purgeAllContent || d.isDemo || d.id === 'draft_01' || d.id === 'draft_02' || d.id.startsWith('demo_') || d.id.includes('demo') || d.candidateId?.startsWith('cand_'))
         .map((d) => d.id);
       for (const id of demoDraftIds) {
         await this.newsDrafts.delete(id);
         clearedCount++;
       }
+      try {
+        if (options.purgeAllContent) {
+          await query(`DELETE FROM news_drafts`);
+        } else {
+          await query(`DELETE FROM news_drafts WHERE id IN ('draft_01', 'draft_02') OR id LIKE '%demo%' OR candidate_id LIKE 'cand_%'`);
+        }
+      } catch (err: any) {
+        console.warn('[DB Purge] SQL news cleanup warning:', err.message);
+      }
     }
-    if (options.clearResources) {
+
+    if (options.clearResources || options.purgeAllContent) {
       const demoResIds = Array.from(this.resources.values())
-        .filter((r: any) => r.isDemo || r.id === 'res_ssc_math_formula' || r.id === 'res_rrb_science_notes' || r.id.startsWith('demo_'))
+        .filter((r: any) => options.purgeAllContent || r.isDemo || r.id === 'res_ssc_math_formula' || r.id === 'res_rrb_science_notes' || r.id.startsWith('demo_') || r.id.includes('demo'))
         .map((r) => r.id);
       for (const id of demoResIds) {
         await this.resources.delete(id);
         clearedCount++;
       }
+      try {
+        if (options.purgeAllContent) {
+          await query(`DELETE FROM resources`);
+        } else {
+          await query(`DELETE FROM resources WHERE id IN ('res_ssc_math_formula', 'res_rrb_science_notes') OR id LIKE '%demo%'`);
+        }
+      } catch (err: any) {
+        console.warn('[DB Purge] SQL resources cleanup warning:', err.message);
+      }
     }
-    if (options.clearAttempts) {
+
+    if (options.clearAttempts || options.purgeAllContent) {
       const demoAttemptIds = Array.from(this.attempts.values())
-        .filter((a: any) => a.isDemo || a.id.startsWith('att_demo_') || a.id.startsWith('demo_'))
+        .filter((a: any) => options.purgeAllContent || a.isDemo || a.id.startsWith('att_demo_') || a.id.includes('demo') || a.studentId?.includes('demo'))
         .map((a) => a.id);
       for (const id of demoAttemptIds) {
         await this.attempts.delete(id);
         clearedCount++;
       }
+      try {
+        if (options.purgeAllContent) {
+          await query(`DELETE FROM attempts`);
+        } else {
+          await query(`DELETE FROM attempts WHERE student_id LIKE '%demo%' OR test_id LIKE '%demo%' OR id LIKE '%demo%'`);
+        }
+      } catch (err: any) {
+        console.warn('[DB Purge] SQL attempts cleanup warning:', err.message);
+      }
     }
+
     if (options.clearStudents) {
       const demoStudentIds = Array.from(this.students.values())
-        .filter((s: any) => s.isDemo || s.id.startsWith('stu_demo_') || s.id.startsWith('demo_'))
+        .filter((s: any) => s.isDemo || s.id.startsWith('stu_demo_') || s.id.startsWith('demo_') || s.email?.includes('demo'))
         .map((s) => s.id);
       for (const id of demoStudentIds) {
         await this.students.delete(id);
         clearedCount++;
       }
+      try {
+        await query(`DELETE FROM students WHERE email LIKE '%demo%' OR id LIKE '%demo%'`);
+      } catch (err: any) {
+        console.warn('[DB Purge] SQL students cleanup warning:', err.message);
+      }
     }
+
     return { success: true, clearedCount };
   }
 

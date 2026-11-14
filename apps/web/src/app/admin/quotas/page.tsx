@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
-import { Gauge, HardDrive, Cpu, Mail, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Gauge, HardDrive, Cpu, Mail, ShieldAlert, CheckCircle2, RefreshCw } from 'lucide-react';
 
 export default function AdminQuotasPage() {
-  const [quotas] = useState({
+  const [quotas, setQuotas] = useState({
     oracle: {
       allocatedCpus: 2,
       allocatedMemoryGb: 12,
@@ -20,15 +20,43 @@ export default function AdminQuotasPage() {
     },
     brevo: {
       dailyLimit: 300,
-      usedToday: 14,
+      usedToday: 0,
       warnThreshold: 250,
       status: 'OPERATIONAL',
+      source: 'LOCAL_FALLBACK',
     },
     api: {
       rssMemoryMb: 48,
       processUptimeHours: 124,
     },
   });
+
+  const fetchLiveBrevo = async () => {
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
+      const token = sessionStorage.getItem('sidprep_admin_token') || localStorage.getItem('sidprep_admin_token');
+      const res = await fetch(`${apiBase}/v1/admin/brevo/live-quota`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setQuotas((prev) => ({
+          ...prev,
+          brevo: {
+            ...prev.brevo,
+            usedToday: data.usedToday ?? 0,
+            dailyLimit: data.limit ?? 300,
+            warnThreshold: data.warnThreshold ?? 250,
+            source: data.source ?? 'LOCAL_FALLBACK',
+          },
+        }));
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    fetchLiveBrevo();
+  }, []);
 
   return (
     <div className="space-y-6">

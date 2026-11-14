@@ -30,7 +30,7 @@ import { signJwt } from '../lib/security.js';
 
 describe('SidPrep 2.0 Shared API Test Suite', async () => {
   const app = await buildServer();
-  const testAdminToken = signJwt({ sub: 'adm_1', email: 'admin@sidprep.in', role: 'SUPER_ADMIN', type: 'admin_session' }, '1h', { audience: 'sidprep:admin_session' });
+  const testAdminToken = signJwt({ sub: 'adm_1', email: 'admin@sidprep.in', role: 'SUPER_ADMIN', type: 'admin_session', mfaVerifiedAt: Date.now() }, '1h', { audience: 'sidprep:admin_session' });
   let testStudentToken = '';
 
   after(async () => {

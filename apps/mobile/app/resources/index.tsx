@@ -10,49 +10,10 @@ import { FilePreviewModal } from '../../src/components/FilePreviewModal';
 
 const CACHE_KEY_RESOURCES = 'cache_resources_list';
 
-const DEFAULT_RESOURCES: ResourceItem[] = [
-  {
-    id: 'res-cgl-quant-formulas',
-    title: 'SSC CGL Quantitative Aptitude High-Speed Formula Handbook',
-    description: 'Complete arithmetic and advance math formulas with geometry theorems and algebra shortcuts.',
-    fileType: 'PDF',
-    fileSizeBytes: 2450000,
-    fileSizeFormatted: '2.4 MB',
-    language: 'en',
-    examId: 'ssc-cgl',
-    examTitle: 'SSC CGL 2026',
-    subjectName: 'Quantitative Aptitude',
-    uploadedAt: '2026-02-15T00:00:00Z',
-    sourceAttribution: 'SidPrep Content Team',
-    previewAllowed: true,
-    downloadAllowed: false,
-    offlineAllowed: true,
-    isOfflineCached: false
-  },
-  {
-    id: 'res-rrb-science-notes',
-    title: 'RRB NTPC General Science Revision Notes (Physics & Chemistry)',
-    description: 'Essential NCERT-based summary covering SI units, periodic table, and mechanics laws.',
-    fileType: 'PDF',
-    fileSizeBytes: 1850000,
-    fileSizeFormatted: '1.8 MB',
-    language: 'en',
-    examId: 'rrb-ntpc',
-    examTitle: 'RRB NTPC',
-    subjectName: 'General Science',
-    uploadedAt: '2026-02-20T00:00:00Z',
-    sourceAttribution: 'SidPrep Science Faculty',
-    previewAllowed: true,
-    downloadAllowed: false,
-    offlineAllowed: true,
-    isOfflineCached: false
-  }
-];
-
 export default function ResourcesScreen() {
   const { theme, scaledFontSize, radii, touchTarget } = useTheme();
 
-  const [resources, setResources] = useState<ResourceItem[]>(DEFAULT_RESOURCES);
+  const [resources, setResources] = useState<ResourceItem[]>([]);
   const [selectedFileType, setSelectedFileType] = useState<string>('ALL');
   const [activePreviewResource, setActivePreviewResource] = useState<ResourceItem | null>(null);
   const [previewModalVisible, setPreviewModalVisible] = useState(false);
@@ -68,14 +29,14 @@ export default function ResourcesScreen() {
         setResources(items);
         await sqliteDb.setCache(CACHE_KEY_RESOURCES, items);
       } else {
-        setResources(DEFAULT_RESOURCES);
+        setResources([]);
       }
     } catch {
       const cached = await sqliteDb.getCache<ResourceItem[]>(CACHE_KEY_RESOURCES);
       if (Array.isArray(cached) && cached.length > 0) {
         setResources(cached);
       } else {
-        setResources(DEFAULT_RESOURCES);
+        setResources([]);
       }
     } finally {
       setLoading(false);
@@ -144,8 +105,8 @@ export default function ResourcesScreen() {
       >
         {loading && (!resources || resources.length === 0) ? (
           <ActivityIndicator style={{ marginTop: 40 }} color={theme.primary} />
-        ) : (
-          (filteredResources ?? []).map((item) => (
+        ) : filteredResources.length > 0 ? (
+          filteredResources.map((item) => (
             <TouchableOpacity
               key={item.id}
               onPress={() => handleOpenPreview(item)}
@@ -202,6 +163,16 @@ export default function ResourcesScreen() {
               </View>
             </TouchableOpacity>
           ))
+        ) : (
+          <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 48, gap: 8 }}>
+            <FileText size={36} color={theme.textMuted} />
+            <Text style={{ fontWeight: '700', marginTop: 8, color: theme.text, fontSize: scaledFontSize('base') }}>
+              No resources in this category
+            </Text>
+            <Text style={{ textAlign: 'center', color: theme.textMuted, fontSize: scaledFontSize('xs') }}>
+              Select "All Formats" or check back later
+            </Text>
+          </View>
         )}
       </ScrollView>
 

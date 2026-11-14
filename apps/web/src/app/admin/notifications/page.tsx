@@ -1,14 +1,44 @@
 'use client';
 
-import { useState } from 'react';
-import { BellRing, Send, AlertTriangle, ShieldCheck, Mail } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { BellRing, Send, AlertTriangle, ShieldCheck, Mail, RefreshCw } from 'lucide-react';
 
 export default function AdminNotificationsPage() {
   const [brevoQuota, setBrevoQuota] = useState({
-    usedToday: 14,
+    usedToday: 0,
     limit: 300,
     warnThreshold: 250,
+    source: 'LOCAL_FALLBACK',
   });
+  const [loadingQuota, setLoadingQuota] = useState(true);
+
+  const fetchQuota = async () => {
+    try {
+      setLoadingQuota(true);
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
+      const token = sessionStorage.getItem('sidprep_admin_token') || localStorage.getItem('sidprep_admin_token');
+      const res = await fetch(`${apiBase}/v1/admin/brevo/live-quota`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBrevoQuota({
+          usedToday: data.usedToday ?? 0,
+          limit: data.limit ?? 300,
+          warnThreshold: data.warnThreshold ?? 250,
+          source: data.source ?? 'LOCAL_FALLBACK',
+        });
+      }
+    } catch {
+      // fallback
+    } finally {
+      setLoadingQuota(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchQuota();
+  }, []);
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');

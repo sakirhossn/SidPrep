@@ -10,59 +10,11 @@ import { Header } from '../../src/components/Header';
 
 const CACHE_KEY_AFFAIRS = 'cache_current_affairs';
 
-const DEFAULT_AFFAIRS: CurrentAffairBrief[] = [
-  {
-    id: 'ca-1',
-    title: 'RBI Monetary Policy: Repo Rate Kept Unchanged at 6.5%',
-    summary: 'The Monetary Policy Committee (MPC) maintained the benchmark policy repo rate under the liquidity adjustment facility at 6.50% to maintain retail inflation within the target band.',
-    category: 'ECONOMY_BANKING',
-    categoryLabel: 'Economy & Banking',
-    applicableExams: ['SSC_CGL', 'IBPS_PO', 'RRB_NTPC'],
-    importanceLevel: 'HIGH',
-    publishedAt: '2026-03-03T05:30:00Z',
-    sourceName: 'Reserve Bank of India (RBI)',
-    sourceUrl: 'https://rbi.org.in',
-    verificationStatus: 'VERIFIED_OFFICIAL',
-    language: 'en',
-    isLanguageFallback: false,
-    isBookmarked: false,
-    hasCorrection: false,
-    revisionPointers: [
-      'Repo Rate: 6.50%',
-      'SDF (Standing Deposit Facility) Rate: 6.25%',
-      'MSF (Marginal Standing Facility) Rate: 6.75%',
-      'MPC Committee size: 6 members (3 RBI, 3 Government nominated)'
-    ]
-  },
-  {
-    id: 'ca-2',
-    title: 'Indian Railways Deploys Kavach 4.0 Automatic Train Protection',
-    summary: 'Ministry of Railways announced standard installation of Kavach 4.0 on high-density New Delhi - Howrah and Mumbai trunk routes with 5G radio connectivity.',
-    category: 'RAILWAYS_DEFENCE',
-    categoryLabel: 'Railways & Defence',
-    applicableExams: ['RRB_NTPC', 'SSC_CGL'],
-    importanceLevel: 'HIGH',
-    publishedAt: '2026-03-02T10:00:00Z',
-    sourceName: 'PIB New Delhi / Indian Railways',
-    sourceUrl: 'https://pib.gov.in',
-    verificationStatus: 'VERIFIED_OFFICIAL',
-    language: 'en',
-    isLanguageFallback: false,
-    isBookmarked: false,
-    hasCorrection: false,
-    revisionPointers: [
-      'Kavach is an indigenously developed Automatic Train Protection (ATP) system by RDSO Lucknow',
-      'Certified to Safety Integrity Level 4 (SIL-4)',
-      'Prevents collision by automatically applying brakes if loco pilot fails to observe signal'
-    ]
-  }
-];
-
 export default function CurrentAffairsScreen() {
   const router = useRouter();
   const { theme, scaledFontSize, radii, touchTarget } = useTheme();
 
-  const [articles, setArticles] = useState<CurrentAffairBrief[]>(DEFAULT_AFFAIRS);
+  const [articles, setArticles] = useState<CurrentAffairBrief[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -76,7 +28,7 @@ export default function CurrentAffairsScreen() {
         setArticles(items);
         await sqliteDb.setCache(CACHE_KEY_AFFAIRS, items);
       } else {
-        setArticles(DEFAULT_AFFAIRS);
+        setArticles([]);
       }
     } catch {
       // Offline fallback
@@ -84,7 +36,7 @@ export default function CurrentAffairsScreen() {
       if (Array.isArray(cached) && cached.length > 0) {
         setArticles(cached);
       } else {
-        setArticles(DEFAULT_AFFAIRS);
+        setArticles([]);
       }
     } finally {
       setLoading(false);

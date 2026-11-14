@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { env } from '../config/index.js';
 import { db } from '../db/index.js';
+import { query } from '../db/pool.js';
 
 export interface SendEmailOptions {
   toEmail: string;
@@ -508,4 +509,98 @@ export async function sendStudentPasswordChangedEmail(
     textContent: `Your SidPrep student password was changed. If you did not make this change, contact support immediately.`,
     isPriorityOtp: true,
   });
+}
+
+/**
+ * Live Brevo Quota Monitor & Synchronizer
+ * Queries Brevo API v3 directly if real key is configured,
+ * otherwise falls back seamlessly to durable PostgreSQL ledger.
+ */
+export async function getLiveBrevoQuota(): Promise<{
+  usedToday: number;
+  limit: number;
+  remaining: number;
+  warnThreshold: number;
+  dateIst: string;
+  source: 'BREVO_LIVE_API' | 'POSTGRES_LEDGER' | 'LOCAL_FALLBACK';
+  syncedAt: string;
+}> {
+  const dateIst = db.getTodayIst();
+  const limit = env.BREVO_DAILY_QUOTA_LIMIT || 300;
+  const warnThreshold = env.BREVO_DAILY_QUOTA_WARN_THRESHOLD || 250;
+
+  const apiKey = env.BREVO_API_KEY;
+  const isRealApiKey =
+    apiKey &&
+    !apiKey.includes('mock') &&
+    !apiKey.includes('REPLACE_ME') &&
+    apiKey.trim().length > 10;
+
+  if (isRealApiKey) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+
+      const resp = await fetch(
+        `https://api.brevo.com/v3/smtp/statistics/reports?startDate=${dateIst}&endDate=${dateIst}`,
+        {
+          method: 'GET',
+          headers: {
+            'api-key': apiKey.trim(),
+            accept: 'application/json',
+          },
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timeout);
+
+      if (resp.ok) {
+        const data = (await resp.json()) as any;
+        const reports = Array.isArray(data?.reports) ? data.reports : [];
+        const totalSent = reports.reduce((acc: number, r: any) => {
+          return acc + (Number(r.delivered || r.requests) || 0);
+        }, 0);
+
+        db.brevoSendsToday = totalSent;
+        try {
+          const quotaId = `eql_brevo_${dateIst}`;
+          await query(
+            `INSERT INTO email_quota_ledger (id, provider, date_ist, sent_count, cap_limit, updated_at)
+             VALUES ($1, 'brevo', $2, $3, $4, NOW())
+             ON CONFLICT (provider, date_ist)
+             DO UPDATE SET sent_count = $3, updated_at = NOW()`,
+            [quotaId, dateIst, totalSent, limit]
+          );
+        } catch (dbErr: any) {
+          console.warn('[Brevo] Failed to update email_quota_ledger with live count:', dbErr.message);
+        }
+
+        return {
+          usedToday: totalSent,
+          limit,
+          remaining: Math.max(0, limit - totalSent),
+          warnThreshold,
+          dateIst,
+          source: 'BREVO_LIVE_API',
+          syncedAt: new Date().toISOString(),
+        };
+      } else {
+        console.warn(`[Brevo] Live API returned status ${resp.status}`);
+      }
+    } catch (err: any) {
+      console.warn('[Brevo] Live API quota fetch warning:', err.message);
+    }
+  }
+
+  // Fallback to durable PostgreSQL ledger
+  const ledger = await db.getEmailQuotaUsage('brevo');
+  return {
+    usedToday: ledger.usedToday,
+    limit: ledger.limit,
+    remaining: ledger.remaining,
+    warnThreshold,
+    dateIst: ledger.dateIst,
+    source: isRealApiKey ? 'POSTGRES_LEDGER' : 'LOCAL_FALLBACK',
+    syncedAt: new Date().toISOString(),
+  };
 }

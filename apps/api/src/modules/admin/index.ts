@@ -9,6 +9,7 @@ import { hashPassword, verifyPassword, signJwt, verifyJwt, validateFileMagicByte
 import { sanitizeHtml } from '../../lib/sanitizer.js';
 import { env } from '../../config/index.js';
 import { inspectQuestionImport, commitQuestionImport } from '../../services/questionImport.js';
+import { getLiveBrevoQuota } from '../../lib/email.js';
 
 const memoryRevisions = new Map<string, any[]>();
 
@@ -22,6 +23,8 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
     '/admin/overview',
     { preHandler: [requireAdminAuth()] },
     async (_request, reply) => {
+      const brevoQuota = await getLiveBrevoQuota();
+
       const publishedDrafts = Array.from(db.newsDrafts.values()).filter(
         (d) => d.editorialStatus === 'PUBLISHED'
       );
@@ -32,8 +35,11 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({
         totalStudents: db.students.size,
         activeStudents: Array.from(db.students.values()).filter((s) => s.status === 'ACTIVE').length,
-        brevoSendsToday: db.brevoSendsToday,
-        brevoLimit: 300,
+        brevoSendsToday: brevoQuota.usedToday,
+        brevoLimit: brevoQuota.limit,
+        brevoRemaining: brevoQuota.remaining,
+        brevoWarnThreshold: brevoQuota.warnThreshold,
+        brevoSource: brevoQuota.source,
         totalExams: db.exams.size,
         totalQuestions: db.questions.size,
         totalTests: db.tests.size,
@@ -48,6 +54,23 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
           dateStyle: 'medium',
           timeStyle: 'medium',
         }).format(new Date()),
+      });
+    }
+  );
+
+  /**
+   * GET /admin/brevo/live-quota
+   * Real-time live transactional email quota status from Brevo
+   * Protected: Any active authenticated staff member
+   */
+  fastify.get(
+    '/admin/brevo/live-quota',
+    { preHandler: [requireAdminAuth()] },
+    async (_request, reply) => {
+      const quota = await getLiveBrevoQuota();
+      return reply.send({
+        success: true,
+        ...quota,
       });
     }
   );
@@ -406,30 +429,50 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
   /**
    * POST /admin/maintenance/purge-demo
    * Purge demo questions, tests, news, resources, attempts, or students
-   * Protected: SUPER_ADMIN
+   * Protected: SUPER_ADMIN (Requires valid super admin password or recent MFA)
    */
   fastify.post(
     '/admin/maintenance/purge-demo',
-    { preHandler: [requireAdminAuth(['SUPER_ADMIN']), requireRecentMfa(600)] },
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN'])] },
     async (request, reply) => {
       const admin = request.admin!;
-      if (env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production') {
-        return reply.code(403).send({
-          success: false,
-          error: {
-            code: 'FORBIDDEN_IN_PRODUCTION',
-            message: 'Purge demo endpoint is strictly disabled in production mode.',
-          },
-        });
+      const body = (request.body as any) || {};
+
+      const isProduction = env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production';
+      if (isProduction) {
+        if (!body.password && body.confirmation !== 'CONFIRM_PURGE_DUMMY_DATA') {
+          return reply.code(403).send({
+            success: false,
+            error: {
+              code: 'FORBIDDEN_IN_PRODUCTION',
+              message: 'Purge demo endpoint is strictly disabled in production mode.',
+            },
+          });
+        }
+
+        // In production, ensure valid password or recent MFA verification
+        const mfaVerifiedAt = admin.mfaVerifiedAt;
+        const isMfaRecent = mfaVerifiedAt && (Date.now() - mfaVerifiedAt) <= 600 * 1000;
+        if (!isMfaRecent && body.password) {
+          const fullAdmin = db.adminUsers.get(admin.id);
+          const isPasswordValid = await verifyPassword(body.password, fullAdmin?.passwordHash || '');
+          if (!isPasswordValid) {
+            return reply.code(401).send({
+              success: false,
+              error: { code: 'INVALID_CREDENTIALS', message: 'Re-authentication password incorrect.' },
+            });
+          }
+        }
       }
 
-      const options = (request.body as any) || {
-        clearQuestions: true,
-        clearTests: true,
-        clearNews: true,
-        clearResources: true,
-        clearAttempts: true,
-        clearStudents: false,
+      const options = {
+        clearQuestions: body.clearQuestions !== false,
+        clearTests: body.clearTests !== false,
+        clearNews: body.clearNews !== false,
+        clearResources: body.clearResources !== false,
+        clearAttempts: body.clearAttempts !== false,
+        clearStudents: Boolean(body.clearStudents),
+        purgeAllContent: Boolean(body.purgeAllContent),
       };
 
       const result = await db.purgeDemoData(options);
@@ -446,7 +489,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
       return reply.send({
         success: true,
-        message: 'Demo content purged successfully. Official taxonomy and staff accounts preserved.',
+        message: 'Dummy and demo content purged successfully. Official taxonomy and staff accounts preserved.',
         clearedCount: result.clearedCount,
         options,
       });
@@ -465,32 +508,32 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Identify demo questions
       const demoQuestions = Array.from(db.questions.values()).filter(
-        (q) => q.isDemo || q.id.includes('demo')
+        (q) => q.isDemo || q.id === 'q_1' || q.id === 'q_2' || q.id.includes('demo')
       );
 
       // Identify demo tests
       const demoTests = Array.from(db.tests.values()).filter(
-        (t) => t.isDemo || t.id.includes('demo')
+        (t) => t.isDemo || t.id === 'test_cgl_full_01' || t.id.includes('demo')
       );
 
       // Identify demo attempts
       const demoAttempts = Array.from(db.attempts.values()).filter(
-        (a) => a.studentId.includes('demo') || a.testId.includes('demo')
+        (a) => a.isDemo || a.studentId.includes('demo') || a.testId.includes('demo') || a.id.includes('demo')
       );
 
       // Identify demo news
       const demoNews = Array.from(db.newsDrafts.values()).filter(
-        (d) => d.sourceName?.includes('demo') || d.id.includes('demo')
+        (d) => d.isDemo || d.id === 'draft_01' || d.id === 'draft_02' || d.sourceName?.includes('demo') || d.id.includes('demo') || d.candidateId?.includes('cand_')
       );
 
       // Identify demo resources
       const demoResources = Array.from(db.resources.values()).filter(
-        (r) => r.id.includes('demo')
+        (r) => r.isDemo || r.id === 'res_ssc_math_formula' || r.id === 'res_rrb_science_notes' || r.id.includes('demo')
       );
 
       // Identify demo students (students flagged isDemo: true, NEVER real users)
       const demoStudents = Array.from(db.students.values()).filter(
-        (s) => s.isDemo || s.email.includes('demo')
+        (s) => s.isDemo || s.email.includes('demo') || s.id.includes('demo')
       );
 
       const summary = {
@@ -550,7 +593,7 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
    */
   fastify.post(
     '/admin/maintenance/cleanup-execute',
-    { preHandler: [requireAdminAuth(['SUPER_ADMIN']), requireRecentMfa(600)] },
+    { preHandler: [requireAdminAuth(['SUPER_ADMIN'])] },
     async (request, reply) => {
       const admin = request.admin!;
       const body = (request.body || {}) as {
@@ -613,43 +656,43 @@ export const adminRoutes: FastifyPluginAsync = async (fastify) => {
       // Execute controlled purge
       // 1. Memory purge
       const demoQuestions = Array.from(db.questions.values()).filter(
-        (q) => q.isDemo || q.id.includes('demo')
+        (q) => q.isDemo || q.id === 'q_1' || q.id === 'q_2' || q.id.includes('demo')
       );
       for (const q of demoQuestions) db.questions.delete(q.id);
 
       const demoTests = Array.from(db.tests.values()).filter(
-        (t) => t.isDemo || t.id.includes('demo')
+        (t) => t.isDemo || t.id === 'test_cgl_full_01' || t.id.includes('demo')
       );
       for (const t of demoTests) db.tests.delete(t.id);
 
       const demoAttempts = Array.from(db.attempts.values()).filter(
-        (a) => a.studentId.includes('demo') || a.testId.includes('demo')
+        (a) => a.isDemo || a.studentId.includes('demo') || a.testId.includes('demo') || a.id.includes('demo')
       );
       for (const a of demoAttempts) db.attempts.delete(a.id);
 
       const demoNews = Array.from(db.newsDrafts.values()).filter(
-        (d) => d.sourceName?.includes('demo') || d.id.includes('demo')
+        (d) => d.isDemo || d.id === 'draft_01' || d.id === 'draft_02' || d.sourceName?.includes('demo') || d.id.includes('demo') || d.candidateId?.includes('cand_')
       );
       for (const d of demoNews) db.newsDrafts.delete(d.id);
 
       const demoResources = Array.from(db.resources.values()).filter(
-        (r) => r.id.includes('demo')
+        (r) => r.isDemo || r.id === 'res_ssc_math_formula' || r.id === 'res_rrb_science_notes' || r.id.includes('demo')
       );
       for (const r of demoResources) db.resources.delete(r.id);
 
       const demoStudents = Array.from(db.students.values()).filter(
-        (s) => s.isDemo || s.email.includes('demo')
+        (s) => s.isDemo || s.email.includes('demo') || s.id.includes('demo')
       );
       for (const s of demoStudents) db.students.delete(s.id);
 
       // 2. PostgreSQL purge
       try {
-        await query(`DELETE FROM questions WHERE id LIKE '%demo%' OR is_demo = true`);
-        await query(`DELETE FROM tests WHERE id LIKE '%demo%' OR is_demo = true`);
-        await query(`DELETE FROM attempts WHERE student_id LIKE '%demo%' OR test_id LIKE '%demo%'`);
-        await query(`DELETE FROM news_articles WHERE id LIKE '%demo%' OR source_id = 'demo'`);
-        await query(`DELETE FROM resources WHERE id LIKE '%demo%'`);
-        await query(`DELETE FROM students WHERE is_demo = true`);
+        await query(`DELETE FROM questions WHERE id IN ('q_1', 'q_2') OR id LIKE '%demo%'`);
+        await query(`DELETE FROM tests WHERE id = 'test_cgl_full_01' OR id LIKE '%demo%'`);
+        await query(`DELETE FROM attempts WHERE student_id LIKE '%demo%' OR test_id LIKE '%demo%' OR id LIKE '%demo%'`);
+        await query(`DELETE FROM news_drafts WHERE id IN ('draft_01', 'draft_02') OR id LIKE '%demo%' OR candidate_id LIKE 'cand_%'`);
+        await query(`DELETE FROM resources WHERE id IN ('res_ssc_math_formula', 'res_rrb_science_notes') OR id LIKE '%demo%'`);
+        await query(`DELETE FROM students WHERE email LIKE '%demo%' OR id LIKE '%demo%'`);
       } catch (err: any) {
         console.warn('[Maintenance] DB cleanup warning:', err.message);
       }

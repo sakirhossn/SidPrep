@@ -114,12 +114,12 @@ export default function LoginScreen() {
     }
   };
 
-  // Student password recovery request
+  // Student password recovery request - navigates to dedicated forgot-password screen
   const handleOpenForgotPassword = () => {
-    setForgotEmail(email.trim());
-    setForgotError(null);
-    setForgotSuccess(false);
-    setForgotModalVisible(true);
+    router.push({
+      pathname: '/(auth)/forgot-password',
+      params: { email: email.trim() },
+    });
   };
 
   const handleSubmitForgotPassword = async () => {

@@ -52,6 +52,34 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [adminUser, setAdminUser] = useState<{ name: string; role: string; email: string } | null>(null);
   const [checkingAuth, setCheckingAuth] = useState(!isPublicAdminRoute);
+  const [brevoQuota, setBrevoQuota] = useState<{ usedToday: number; limit: number; source?: string } | null>(null);
+  const [quotaLoading, setQuotaLoading] = useState(false);
+
+  const fetchBrevoQuota = async () => {
+    try {
+      setQuotaLoading(true);
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
+      const token =
+        sessionStorage.getItem('sidprep_admin_token') ||
+        localStorage.getItem('sidprep_admin_token');
+      if (!token) return;
+      const res = await fetch(`${apiBase}/v1/admin/brevo/live-quota`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBrevoQuota({
+          usedToday: data.usedToday ?? 0,
+          limit: data.limit ?? 300,
+          source: data.source,
+        });
+      }
+    } catch {
+      // network fallback
+    } finally {
+      setQuotaLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (isPublicAdminRoute) {
@@ -124,6 +152,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
     setAdminUser(userObj);
     setCheckingAuth(false);
+    fetchBrevoQuota();
+    const timer = setInterval(fetchBrevoQuota, 30000);
+    return () => clearInterval(timer);
   }, [pathname]);
 
   if (isPublicAdminRoute) {
@@ -268,10 +299,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </div>
 
           <div className="flex items-center gap-4 text-xs">
-            <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
-              <span className="w-2 h-2 rounded-full bg-accent-amber animate-pulse"></span>
-              <span>Brevo: 14/300 Daily Emails</span>
-            </div>
+            <button
+              onClick={fetchBrevoQuota}
+              title={`Click to refresh live quota • ${brevoQuota?.source || 'Synchronized'}`}
+              className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-300 transition-all cursor-pointer"
+            >
+              <span className={`w-2 h-2 rounded-full ${quotaLoading ? 'bg-amber-400 animate-spin' : (brevoQuota && brevoQuota.usedToday > 250 ? 'bg-red-500' : 'bg-emerald-400')} animate-pulse`}></span>
+              <span className="font-mono text-xs">
+                Brevo: {brevoQuota ? `${brevoQuota.usedToday}/${brevoQuota.limit}` : 'Live'} Daily Emails
+              </span>
+            </button>
             <span className="text-slate-400 font-mono text-[11px]">
               Asia/Kolkata (IST)
             </span>
